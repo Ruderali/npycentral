@@ -53,10 +53,10 @@ docs = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/npycentral"
-Documentation = "https://npycentral.readthedocs.io"
-Repository = "https://github.com/yourusername/npycentral"
-Issues = "https://github.com/yourusername/npycentral/issues"
+Homepage = "https://github.com/Ruderali/npycentral"
+Documentation = "https://github.com/Ruderali/npycentral/blob/main/docs/api-reference.md"
+Repository = "https://github.com/Ruderali/npycentral"
+Issues = "https://github.com/Ruderali/npycentral/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/npycentral"]
