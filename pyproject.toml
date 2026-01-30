@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "npycentral"
-version = "0.1.0"
+version = "0.1.1"
 description = "Python Toolkit for N-Central RMM API"
 readme = "README.md"
 requires-python = ">=3.9"

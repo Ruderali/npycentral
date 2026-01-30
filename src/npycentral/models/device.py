@@ -68,9 +68,10 @@ class Device:
         # Parse the timestamp - handle both 'Z' suffix and missing timezone
         dt = datetime.fromisoformat(self.lastApplianceCheckinTime.replace('Z', '+00:00'))
 
-        # If the datetime is naive (no timezone info), treat it as UTC
+        # If the datetime is naive (no timezone info), treat it as already in the configured timezone
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+            dt = dt.replace(tzinfo=self.timezone)
+
 
         # Convert to the configured timezone
         return dt.astimezone(self.timezone)
