@@ -20,6 +20,25 @@ from .exceptions import (
 logger = logging.getLogger(__name__)
 
 
+class SecretString:
+    """A string wrapper that hides its value in string representations."""
+
+    __slots__ = ('_value',)
+
+    def __init__(self, value: str):
+        self._value = value
+
+    def get_secret_value(self) -> str:
+        """Explicitly retrieve the secret value."""
+        return self._value
+
+    def __repr__(self) -> str:
+        return "SecretString('**********')"
+
+    def __str__(self) -> str:
+        return "**********"
+
+
 class NCentralClient(DeviceMixin, CustomerMixin, TaskMixin, PropertyMixin, FilterMixin):
     """N-Central API Client with modular functionality via mixins."""
 
@@ -27,7 +46,7 @@ class NCentralClient(DeviceMixin, CustomerMixin, TaskMixin, PropertyMixin, Filte
         self,
         base_url: str = None,
         jwt: str = None,
-        base_so_id: str = None,
+        base_so_id: str = "50", # Default Service Organization ID for servers with a single SO
         default_timezone: str = "UTC",
         ui_port: int = 8443,
         token_ttl: int = 3600
@@ -46,18 +65,21 @@ class NCentralClient(DeviceMixin, CustomerMixin, TaskMixin, PropertyMixin, Filte
         Raises:
             ValueError: If base_url or jwt are not provided
         """
+        if not base_url or not jwt:
+            raise ValueError("base_url and jwt must be provided")
+
         # API Configuration
         self.base_url = base_url
-        self.jwt = jwt
+        self._jwt = SecretString(jwt)
         self.base_so_id = base_so_id
         self.ui_port = ui_port
-
-        if not self.base_url or not self.jwt:
-            raise ValueError("base_url and jwt must be provided")
 
         # Configuration
         self.default_timezone = ZoneInfo(default_timezone)
         self.cache = TTLCache(maxsize=2, ttl=token_ttl)
+
+    def __repr__(self) -> str:
+        return f"NCentralClient(base_url='{self.base_url}')"
 
     # ========================================================================
     # AUTHENTICATION METHODS
@@ -75,7 +97,7 @@ class NCentralClient(DeviceMixin, CustomerMixin, TaskMixin, PropertyMixin, Filte
             APIError: If the request fails
         """
         url = f"{self.base_url}/api/auth/authenticate"
-        headers = {"Authorization": f"Bearer {self.jwt}"}
+        headers = {"Authorization": f"Bearer {self._jwt.get_secret_value()}"}
 
         try:
             response = requests.post(url, headers=headers)
@@ -85,8 +107,8 @@ class NCentralClient(DeviceMixin, CustomerMixin, TaskMixin, PropertyMixin, Filte
             tokens = data.get("tokens", {})
 
             return {
-                "access_token": tokens.get("access", {}).get("token"),
-                "refresh_token": tokens.get("refresh", {}).get("token"),
+                "access_token": SecretString(tokens.get("access", {}).get("token")),
+                "refresh_token": SecretString(tokens.get("refresh", {}).get("token")),
                 "expiry_seconds": tokens.get("access", {}).get("expirySeconds", 3600)
             }
         except requests.HTTPError as e:
@@ -116,7 +138,7 @@ class NCentralClient(DeviceMixin, CustomerMixin, TaskMixin, PropertyMixin, Filte
         """
         if "tokens" not in self.cache:
             self.cache["tokens"] = self._get_auth()
-        return self.cache["tokens"]["access_token"]
+        return self.cache["tokens"]["access_token"].get_secret_value()
 
     def refresh_token(self) -> str:
         """
@@ -138,7 +160,7 @@ class NCentralClient(DeviceMixin, CustomerMixin, TaskMixin, PropertyMixin, Filte
 
         url = f"{self.base_url}/api/auth/refresh"
         headers = {"Content-Type": "application/json"}
-        payload = {"refresh_token": refresh_token}
+        payload = {"refresh_token": refresh_token.get_secret_value()}
 
         try:
             response = requests.post(url, headers=headers, json=payload)
@@ -148,12 +170,12 @@ class NCentralClient(DeviceMixin, CustomerMixin, TaskMixin, PropertyMixin, Filte
             tokens = data.get("tokens", {})
 
             self.cache["tokens"] = {
-                "access_token": tokens.get("access", {}).get("token"),
-                "refresh_token": tokens.get("refresh", {}).get("token"),
+                "access_token": SecretString(tokens.get("access", {}).get("token")),
+                "refresh_token": SecretString(tokens.get("refresh", {}).get("token")),
                 "expiry_seconds": tokens.get("access", {}).get("expirySeconds", 3600)
             }
 
-            return self.cache["tokens"]["access_token"]
+            return self.cache["tokens"]["access_token"].get_secret_value()
         except requests.HTTPError as e:
             logger.warning(f"Token refresh failed: {e}, falling back to JWT auth")
             self.cache.clear()

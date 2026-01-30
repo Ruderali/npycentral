@@ -165,7 +165,8 @@ class DeviceMixin:
         self,
         filter_id: Optional[int] = None,
         pagesize: int = 50,
-        use_cache: bool = True
+        use_cache: bool = True,
+        max_pages: Optional[int] = None
     ) -> List[Device]:
         """
         Get devices with caching support (lazy-loaded).
@@ -174,6 +175,7 @@ class DeviceMixin:
             filter_id: Optional filter ID
             pagesize: Results per page
             use_cache: Whether to use cache
+            max_pages: Maximum number of pages to fetch (None for all)
 
         Returns:
             list: Cached or fresh device list
@@ -182,14 +184,14 @@ class DeviceMixin:
             APIError: If the API request fails
         """
         if not use_cache:
-            return self._fetch_devices_fresh(filter_id, pagesize)
+            return self._fetch_devices_fresh(filter_id, pagesize, max_pages)
 
         self._init_device_cache()
         cache_key = f"devices_{filter_id}"
 
         if cache_key not in self._device_cache:
             logger.debug(f"Cache miss for {cache_key}, fetching from API")
-            self._device_cache[cache_key] = self._fetch_devices_fresh(filter_id, pagesize)
+            self._device_cache[cache_key] = self._fetch_devices_fresh(filter_id, pagesize, max_pages)
         else:
             logger.debug(f"Cache hit for {cache_key}")
 
@@ -198,7 +200,8 @@ class DeviceMixin:
     def _fetch_devices_fresh(
         self,
         filter_id: Optional[int] = None,
-        pagesize: int = 50
+        pagesize: int = 50,
+        max_pages: Optional[int] = None
     ) -> List[Device]:
         """
         Fetch devices fresh from API without caching.
@@ -206,6 +209,7 @@ class DeviceMixin:
         Args:
             filter_id: Optional filter ID
             pagesize: Results per page
+            max_pages: Maximum number of pages to fetch (None for all)
 
         Returns:
             list: List of Device objects
@@ -214,8 +218,8 @@ class DeviceMixin:
             APIError: If the API request fails
         """
         params = {"filterId": filter_id} if filter_id else None
-        logger.debug(f"Fetching devices (filter_id={filter_id}, pagesize={pagesize})")
-        devices_data = self.get_all("devices", params=params, pagesize=pagesize)
+        logger.debug(f"Fetching devices (filter_id={filter_id}, pagesize={pagesize}, max_pages={max_pages})")
+        devices_data = self.get_all("devices", params=params, pagesize=pagesize, max_pages=max_pages)
         logger.info(f"Fetched {len(devices_data)} devices")
         return [Device.from_dict(device, timezone=self.default_timezone, client=self)
                 for device in devices_data]
@@ -229,7 +233,8 @@ class DeviceMixin:
         filter_id: Optional[int] = None,
         filter_name: Optional[str] = None,
         pagesize: int = 50,
-        use_cache: bool = False
+        use_cache: bool = False,
+        max_pages: Optional[int] = None
     ) -> List[Device]:
         """
         Get all devices with optional filtering and caching.
@@ -239,6 +244,7 @@ class DeviceMixin:
             filter_name: Optional filter name (resolved to ID automatically)
             pagesize: Results per page
             use_cache: Whether to use cache (default: False for backwards compatibility)
+            max_pages: Maximum number of pages to fetch (None for all)
 
         Returns:
             list: List of Device objects
@@ -256,9 +262,12 @@ class DeviceMixin:
 
             # Get devices by filter ID
             dcs = nc.get_devices(filter_id=83)
+
+            # Get first page only
+            dcs = nc.get_devices(max_pages=1)
         """
         resolved_filter_id = self._resolve_filter_id(filter_id, filter_name)
-        return self._get_cached_devices(resolved_filter_id, pagesize, use_cache)
+        return self._get_cached_devices(resolved_filter_id, pagesize, use_cache, max_pages)
 
     def get_device(
         self,
