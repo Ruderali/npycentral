@@ -30,6 +30,21 @@ client = NCentralClient(
 | `ui_port` | int | 8443 | N-Central UI port for deep links |
 | `token_ttl` | int | 3600 | Access token cache TTL in seconds |
 
+### Security
+
+The client protects sensitive tokens from accidental exposure. JWT and access tokens are wrapped in `SecretString` objects that mask their values when printed or logged:
+
+```python
+print(client)
+# NCentralClient(base_url='https://ncentral.example.com')
+
+print(client.__dict__)
+# {..., '_jwt': SecretString('**********'), ...}
+
+# Tokens can still be accessed explicitly when needed:
+client._jwt.get_secret_value()
+```
+
 ---
 
 ## Devices
@@ -38,7 +53,7 @@ client = NCentralClient(
 
 | Method | Description |
 |--------|-------------|
-| `get_devices(filter_id, filter_name, pagesize, use_cache)` | Get all devices, optionally filtered |
+| `get_devices(filter_id, filter_name, pagesize, use_cache, max_pages)` | Get all devices, optionally filtered |
 | `get_device(device_id, device_name, filter_id, filter_name)` | Get single device by ID or name |
 | `find_devices_by_name(device_name, filter_id, filter_name)` | Find all devices matching a name pattern |
 | `find_devices_by_customer(customer_id, filter_id, filter_name)` | Find all devices for a customer |
@@ -49,6 +64,13 @@ client = NCentralClient(
 servers = client.get_devices(filter_name="Servers - Windows")
 for server in servers:
     print(f"{server.longName} - Last checkin: {server.last_checkin_datetime}")
+```
+
+**Example: Limit Results (for testing/sampling)**
+```python
+# Get only the first page of results
+sample = client.get_devices(filter_name="Servers - Windows", max_pages=1)
+print(f"Got {len(sample)} devices from first page")
 ```
 
 **Example: Get Device by Name**
