@@ -58,17 +58,22 @@ class Device:
         """
         Parse the lastApplianceCheckinTime as a datetime object in the configured timezone.
         The API returns UTC timestamps, which are then converted to the instance's timezone.
-        
+
         Returns:
             datetime: Timezone-aware datetime object, or None if lastApplianceCheckinTime is null
         """
         if self.lastApplianceCheckinTime is None:
             return None
-        
-        # Parse as UTC first (the API returns UTC timestamps)
-        dt_utc = datetime.fromisoformat(self.lastApplianceCheckinTime.replace('Z', '+00:00'))
+
+        # Parse the timestamp - handle both 'Z' suffix and missing timezone
+        dt = datetime.fromisoformat(self.lastApplianceCheckinTime.replace('Z', '+00:00'))
+
+        # If the datetime is naive (no timezone info), treat it as UTC
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+
         # Convert to the configured timezone
-        return dt_utc.astimezone(self.timezone)
+        return dt.astimezone(self.timezone)
     
     def load_assets(self, force_refresh: bool = False) -> DeviceAssets:
         """
