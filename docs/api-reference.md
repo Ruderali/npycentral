@@ -161,10 +161,13 @@ print(f"Total issues: {len(issues)}")
 
 ## Customers & Sites
 
+### Customer Retrieval
+
 | Method | Description |
 |--------|-------------|
-| `get_customers(so_id, pagesize)` | List all customers |
-| `get_customer(customer_id)` | Get specific customer |
+| `get_customers(so_id, pagesize, use_cache)` | List all customers as Customer objects |
+| `get_customer(customer_id, customer_name, so_id, use_cache)` | Get customer by ID or name |
+| `find_customers_by_name(customer_name, so_id, use_cache)` | Find all customers matching a name pattern |
 | `create_customer(customer_data, so_id)` | Create new customer |
 | `create_site(customer_id, site_data)` | Create site under customer |
 | `get_service_orgs(pagesize)` | List all service organizations |
@@ -173,7 +176,19 @@ print(f"Total issues: {len(issues)}")
 ```python
 customers = client.get_customers()
 for c in customers:
-    print(f"{c['customerName']} (ID: {c['customerId']})")
+    print(f"{c.customerName} (ID: {c.customerId})")
+```
+
+**Example: Get Customer by Name**
+```python
+# Simple lookup
+customer = client.get_customer(customer_name="Acme Corp")
+
+# By ID
+customer = client.get_customer(customer_id=237)
+
+print(f"Customer: {customer.customerName}")
+print(f"Contact: {customer.full_contact_name}")
 ```
 
 **Example: Find Your SO ID**
@@ -193,6 +208,53 @@ site = client.create_site(
         "contactLastName": "Smith"
     }
 )
+```
+
+### PSA Integration
+
+| Method | Description |
+|--------|-------------|
+| `get_psa_customer_id(customer_id)` | Get PSA (ConnectWise/Autotask) customer ID |
+| `get_psa_customer_mapping(customer_id)` | Get full PSA mapping details |
+
+**Example: Lazy-Load PSA Customer ID**
+```python
+customer = client.get_customer(customer_name="Acme Corp")
+
+# PSA ID is lazy-loaded on first access
+print(f"N-Central ID: {customer.customerId}")
+print(f"ConnectWise ID: {customer.psa_customer_id}")  # Fetches from API
+```
+
+**Example: Direct PSA Lookup**
+```python
+psa_id = client.get_psa_customer_id(237)
+print(f"PSA Customer ID: {psa_id}")
+
+# Get full mapping details
+mapping = client.get_psa_customer_mapping(237)
+print(f"Contact ID: {mapping['contactId']}")
+print(f"Location ID: {mapping['locationId']}")
+```
+
+### Customer Caching
+
+| Method | Description |
+|--------|-------------|
+| `set_customer_cache_ttl(ttl_seconds)` | Set cache time-to-live |
+| `clear_customer_cache(so_id)` | Clear cache (specific SO or all) |
+
+**Example: Use Customer Cache**
+```python
+# First call fetches from API
+customers = client.get_customers(use_cache=True)
+
+# Second call uses cache
+customers = client.get_customers(use_cache=True)
+
+# Force fresh data
+client.clear_customer_cache()
+customers = client.get_customers(use_cache=True)
 ```
 
 ---
@@ -318,7 +380,9 @@ print(f"Remote Control: {remote}")
 
 ## Caching
 
-Device lists are cached to improve performance. Default TTL is 5 minutes.
+Device and customer lists are cached to improve performance. Default TTL is 5 minutes.
+
+### Device Cache
 
 | Method | Description |
 |--------|-------------|
@@ -345,6 +409,22 @@ client.clear_device_cache(filter_id=filter_obj.filterId)
 
 # Or just bypass cache for one call
 devices = client.get_devices(filter_name="Servers", use_cache=False)
+```
+
+### Customer Cache
+
+| Method | Description |
+|--------|-------------|
+| `set_customer_cache_ttl(ttl_seconds)` | Set cache time-to-live |
+| `clear_customer_cache(so_id)` | Clear cache (specific SO or all) |
+
+**Example: Customer Caching**
+```python
+# Enable caching for customer lookups
+customers = client.get_customers(use_cache=True)
+
+# Clear customer cache
+client.clear_customer_cache()
 ```
 
 ---
