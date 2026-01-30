@@ -5,6 +5,7 @@ from .device_assets import DeviceAssets
 from .device_filter import DeviceFilter
 from .active_issue import ActiveIssue
 from .custom_property import CustomProperty
+from .customer import Customer
 from .service_organization import ServiceOrganization
 from .service_monitoring_status import (
     ServiceMonitoringStatus,
@@ -12,6 +13,7 @@ from .service_monitoring_status import (
 )
 
 __all__ = [
+    'Customer',
     'Device',
     'DeviceAssets',
     'DeviceFilter',
