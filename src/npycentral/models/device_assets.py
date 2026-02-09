@@ -1,6 +1,81 @@
 from dataclasses import dataclass, fields as dc_fields, MISSING
-from typing import Optional, List, get_type_hints, get_origin, Union, get_args
+from typing import Optional, List, Dict, Set, get_type_hints, get_origin, Union, get_args
 from datetime import datetime
+
+
+# ============================================================================
+# Role Detection: service name -> server role mapping
+# ============================================================================
+# Each entry: role name -> (exact service names, service name prefixes)
+# All matching is case-insensitive against Service.servicename
+_ROLE_INDICATORS: Dict[str, tuple[Set[str], Set[str]]] = {
+    "Domain Controller": (
+        {"ntds", "kdc"},
+        set(),
+    ),
+    "DNS Server": (
+        {"dns"},
+        set(),
+    ),
+    "DHCP Server": (
+        {"dhcpserver"},
+        set(),
+    ),
+    "File Server": (
+        {"srmsvc", "dfs", "dfsr"},
+        set(),
+    ),
+    "Exchange Server": (
+        set(),
+        {"msexchange"},
+    ),
+    "SQL Server": (
+        {"mssqlserver", "sqlserveragent"},
+        {"mssql$"},
+    ),
+    "Web Server (IIS)": (
+        {"w3svc", "iisadmin"},
+        set(),
+    ),
+    "Hyper-V": (
+        {"vmms", "vmcompute"},
+        set(),
+    ),
+    "Remote Desktop Services": (
+        {"tssdis", "tsgateway", "tscpubrpc"},
+        set(),
+    ),
+    "WSUS": (
+        {"wsusservice"},
+        set(),
+    ),
+    "Certificate Authority": (
+        {"certsvc"},
+        set(),
+    ),
+    "RADIUS / NPS": (
+        {"ias"},
+        set(),
+    ),
+    "SharePoint": (
+        {"sptimerv4", "spadminv4", "spsearch4"},
+        set(),
+    ),
+}
+
+
+def _detect_roles(services: List['Service']) -> List[str]:
+    svc_names = {s.servicename.lower() for s in services if s.servicename}
+    roles = []
+    for role, (exact, prefixes) in _ROLE_INDICATORS.items():
+        if exact & svc_names:
+            roles.append(role)
+            continue
+        if prefixes and any(
+            svc.startswith(pfx) for pfx in prefixes for svc in svc_names
+        ):
+            roles.append(role)
+    return roles
 
 
 def _is_optional(type_hint) -> bool:
@@ -725,3 +800,8 @@ class DeviceAssets:
     def get_pending_patches(self) -> List[Patch]:
         """Get list of patches not yet installed."""
         return [patch for patch in self.data._extra.patch if not patch.is_installed]
+
+    @property
+    def roles(self) -> List[str]:
+        """Infer installed server roles from Windows services."""
+        return _detect_roles(self.data._extra.service)
