@@ -10,6 +10,7 @@ from ..models import (
     ServiceMonitoringStatus,
     ServiceMonitoringCollection
 )
+from ..models.appliance_task import ApplianceTask, CpuUsage, DiskUsage, MemoryUsage
 from ..exceptions import NotFoundError
 
 logger = logging.getLogger(__name__)
@@ -911,3 +912,152 @@ class DeviceMixin:
                 for disk in failures
             ]
         }
+
+    # ========================================================================
+    # APPLIANCE TASK METHODS
+    # ========================================================================
+
+    def get_appliance_task(self, task_id: int) -> ApplianceTask:
+        """
+        Get detailed scan data for an appliance task.
+
+        Calls GET /api/appliance-tasks/{taskId} and returns a generic
+        ApplianceTask containing all reported metrics via serviceDetails.
+
+        Args:
+            task_id: The task ID (from ServiceMonitoringStatus.taskId)
+
+        Returns:
+            ApplianceTask: Parsed task data with service details
+
+        Raises:
+            NotFoundError: If task not found
+            APIError: If the API request fails
+        """
+        logger.debug(f"Fetching appliance task {task_id}")
+        response = self.get(f"appliance-tasks/{task_id}")
+        return ApplianceTask.from_dict(response)
+
+    def get_device_disk_usage(
+        self,
+        device_id: Optional[int] = None,
+        device_name: Optional[str] = None
+    ) -> List[DiskUsage]:
+        """
+        Get disk usage metrics (total, used, free, %) for all monitored volumes.
+
+        Fetches disk monitor task IDs from service monitoring, then retrieves
+        detailed metrics from the appliance-tasks endpoint for each volume.
+
+        Args:
+            device_id: Device ID (takes priority)
+            device_name: Device name
+
+        Returns:
+            list: List of DiskUsage objects, one per monitored volume
+
+        Raises:
+            ValueError: If neither device_id nor device_name provided
+            NotFoundError: If device not found
+            APIError: If the API request fails
+
+        Example:
+            disks = nc.get_device_disk_usage(device_name="DC01")
+            for disk in disks:
+                print(f"{disk.volume}: {disk.free_gb:.1f} GB free ({disk.usage_percent}% used)")
+        """
+        resolved_device_id = self._resolve_device_id(device_id, device_name)
+        logger.debug(f"Fetching disk usage for device {resolved_device_id}")
+        monitoring = self.get_device_service_monitoring_status(device_id=resolved_device_id)
+        disk_monitors = monitoring.get_disk_monitors()
+
+        results = []
+        for monitor in disk_monitors:
+            task = self.get_appliance_task(monitor.taskId)
+            results.append(DiskUsage(
+                volume=monitor.volume_letter or "Unknown",
+                total_kb=task.get_detail_value("disk_total") or 0,
+                used_kb=task.get_detail_value("disk_used") or 0,
+                free_kb=task.get_detail_value("disk_free") or 0,
+                usage_percent=task.get_detail_value("disk_usage") or 0,
+                state=task.state,
+                scan_time=task.scanTime,
+            ))
+
+        logger.info(f"Retrieved disk usage for {len(results)} volumes on device {resolved_device_id}")
+        return results
+
+    def get_device_cpu_usage(
+        self,
+        device_id: Optional[int] = None,
+        device_name: Optional[str] = None
+    ) -> CpuUsage:
+        """
+        Get CPU usage metrics including top 5 processes for a device.
+
+        Args:
+            device_id: Device ID (takes priority)
+            device_name: Device name
+
+        Returns:
+            CpuUsage: CPU usage percentage and top processes
+
+        Raises:
+            ValueError: If neither device_id nor device_name provided
+            NotFoundError: If device or CPU monitor not found
+            APIError: If the API request fails
+
+        Example:
+            cpu = nc.get_device_cpu_usage(device_name="DC01")
+            print(f"CPU: {cpu.usage_percent}%")
+            for proc in cpu.top_processes:
+                print(f"  {proc.name} (PID {proc.pid}): {proc.cpu_usage_percent}%")
+        """
+        resolved_device_id = self._resolve_device_id(device_id, device_name)
+        logger.debug(f"Fetching CPU usage for device {resolved_device_id}")
+        monitoring = self.get_device_service_monitoring_status(device_id=resolved_device_id)
+        cpu_monitors = monitoring.get_cpu_monitors()
+
+        if not cpu_monitors:
+            raise NotFoundError(f"No CPU monitor found for device {resolved_device_id}")
+
+        task = self.get_appliance_task(cpu_monitors[0].taskId)
+        logger.info(f"Retrieved CPU usage for device {resolved_device_id}")
+        return CpuUsage.from_appliance_task(task)
+
+    def get_device_memory_usage(
+        self,
+        device_id: Optional[int] = None,
+        device_name: Optional[str] = None
+    ) -> MemoryUsage:
+        """
+        Get memory usage metrics (physical + virtual) including top 5 processes.
+
+        Args:
+            device_id: Device ID (takes priority)
+            device_name: Device name
+
+        Returns:
+            MemoryUsage: Physical and virtual memory metrics with top processes
+
+        Raises:
+            ValueError: If neither device_id nor device_name provided
+            NotFoundError: If device or memory monitor not found
+            APIError: If the API request fails
+
+        Example:
+            mem = nc.get_device_memory_usage(device_name="DC01")
+            print(f"Physical: {mem.physical_used_gb:.1f}/{mem.physical_total_gb:.1f} GB ({mem.physical_usage_percent}%)")
+            print(f"Virtual: {mem.virtual_used_gb:.1f}/{mem.virtual_total_gb:.1f} GB ({mem.virtual_usage_percent}%)")
+        """
+        resolved_device_id = self._resolve_device_id(device_id, device_name)
+        logger.debug(f"Fetching memory usage for device {resolved_device_id}")
+        monitoring = self.get_device_service_monitoring_status(device_id=resolved_device_id)
+        mem_monitors = monitoring.get_memory_monitors()
+
+        if not mem_monitors:
+            raise NotFoundError(f"No memory monitor found for device {resolved_device_id}")
+
+        task = self.get_appliance_task(mem_monitors[0].taskId)
+        logger.info(f"Retrieved memory usage for device {resolved_device_id}")
+        return MemoryUsage.from_appliance_task(task)
