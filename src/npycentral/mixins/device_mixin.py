@@ -165,7 +165,7 @@ class DeviceMixin:
     def _get_cached_devices(
         self,
         filter_id: Optional[int] = None,
-        pagesize: int = 50,
+        pagesize: int = 1000,
         use_cache: bool = True,
         max_pages: Optional[int] = None
     ) -> List[Device]:
