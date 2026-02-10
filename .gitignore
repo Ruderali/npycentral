@@ -28,6 +28,7 @@ htmlcov/
 .tox/
 .nox/
 scratch.py
+context.md
 
 # IDEs
 .vscode/

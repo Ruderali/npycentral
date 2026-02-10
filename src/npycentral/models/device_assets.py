@@ -1,6 +1,113 @@
-from dataclasses import dataclass
-from typing import Optional, List
+from dataclasses import dataclass, fields as dc_fields, MISSING
+from typing import Optional, List, Dict, Set, get_type_hints, get_origin, Union, get_args
 from datetime import datetime
+
+
+# ============================================================================
+# Role Detection: service name -> server role mapping
+# ============================================================================
+# Each entry: role name -> (exact service names, service name prefixes)
+# All matching is case-insensitive against Service.servicename
+_ROLE_INDICATORS: Dict[str, tuple[Set[str], Set[str]]] = {
+    "Domain Controller": (
+        {"ntds", "kdc"},
+        set(),
+    ),
+    "DNS Server": (
+        {"dns"},
+        set(),
+    ),
+    "DHCP Server": (
+        {"dhcpserver"},
+        set(),
+    ),
+    "File Server": (
+        {"srmsvc", "dfs", "dfsr"},
+        set(),
+    ),
+    "Exchange Server": (
+        set(),
+        {"msexchange"},
+    ),
+    "SQL Server": (
+        {"mssqlserver", "sqlserveragent"},
+        {"mssql$"},
+    ),
+    "Web Server (IIS)": (
+        {"w3svc", "iisadmin"},
+        set(),
+    ),
+    "Hyper-V": (
+        {"vmms", "vmcompute"},
+        set(),
+    ),
+    "Remote Desktop Services": (
+        {"tssdis", "tsgateway", "tscpubrpc"},
+        set(),
+    ),
+    "WSUS": (
+        {"wsusservice"},
+        set(),
+    ),
+    "Certificate Authority": (
+        {"certsvc"},
+        set(),
+    ),
+    "RADIUS / NPS": (
+        {"ias"},
+        set(),
+    ),
+    "SharePoint": (
+        {"sptimerv4", "spadminv4", "spsearch4"},
+        set(),
+    ),
+}
+
+
+def _detect_roles(services: List['Service']) -> List[str]:
+    svc_names = {s.servicename.lower() for s in services if s.servicename}
+    roles = []
+    for role, (exact, prefixes) in _ROLE_INDICATORS.items():
+        if exact & svc_names:
+            roles.append(role)
+            continue
+        if prefixes and any(
+            svc.startswith(pfx) for pfx in prefixes for svc in svc_names
+        ):
+            roles.append(role)
+    return roles
+
+
+def _is_optional(type_hint) -> bool:
+    return get_origin(type_hint) is Union and type(None) in get_args(type_hint)
+
+
+def _from_dict(cls, data: dict):
+    """Create a dataclass instance from a dict, ignoring unknown keys
+    and defaulting missing Optional fields to None."""
+    hints = get_type_hints(cls)
+    known = {f.name for f in dc_fields(cls)}
+    filtered = {k: v for k, v in data.items() if k in known}
+
+    # Auto-fill None for missing Optional fields that lack defaults
+    for f in dc_fields(cls):
+        if f.name not in filtered and f.default is MISSING and f.default_factory is MISSING:
+            if _is_optional(hints.get(f.name)):
+                filtered[f.name] = None
+
+    try:
+        return cls(**filtered)
+    except TypeError as e:
+        required = {
+            f.name for f in dc_fields(cls)
+            if f.default is MISSING and f.default_factory is MISSING
+            and not _is_optional(hints.get(f.name))
+        }
+        missing = required - filtered.keys()
+        raise TypeError(
+            f"{cls.__name__} missing required fields: {missing}. "
+            f"Mark them Optional in device_assets.py if they're not always present."
+        ) from e
 
 
 # ============================================================================
@@ -15,7 +122,7 @@ class USBDevice:
     
     @classmethod
     def from_dict(cls, data: dict) -> 'USBDevice':
-        return cls(**data)
+        return _from_dict(cls, data)
 
 
 # ============================================================================
@@ -29,7 +136,7 @@ class OSFeature:
     
     @classmethod
     def from_dict(cls, data: dict) -> 'OSFeature':
-        return cls(**data)
+        return _from_dict(cls, data)
 
 
 # ============================================================================
@@ -38,17 +145,17 @@ class OSFeature:
 @dataclass
 class Memory:
     _index: int
-    serialnumber: str
-    location: str
-    type: str
-    partnumber: str
+    serialnumber: Optional[str]
+    location: Optional[str]
+    type: Optional[str]
+    partnumber: Optional[str]
     speed: Optional[str]
-    manufacturer: str
+    manufacturer: Optional[str]
     capacity: str
     
     @classmethod
     def from_dict(cls, data: dict) -> 'Memory':
-        return cls(**data)
+        return _from_dict(cls, data)
 
 
 # ============================================================================
@@ -56,27 +163,31 @@ class Memory:
 # ============================================================================
 @dataclass
 class OSDetailed:
-    licensetype: str
-    installdate: str
-    serialnumber: str
-    publisher: str
+    licensetype: Optional[str]
+    installdate: Optional[str]
+    serialnumber: Optional[str]
+    publisher: Optional[str]
     csdversion: Optional[str]
-    lastbootuptime: str
-    supportedos: str
-    licensekey: str
+    lastbootuptime: Optional[str]
+    supportedos: Optional[str]
+    licensekey: Optional[str]
     
     @classmethod
     def from_dict(cls, data: dict) -> 'OSDetailed':
-        return cls(**data)
+        return _from_dict(cls, data)
     
     @property
-    def install_datetime(self) -> datetime:
+    def install_datetime(self) -> Optional[datetime]:
         """Parse installdate as datetime object."""
+        if self.installdate is None:
+            return None
         return datetime.strptime(self.installdate, '%Y-%m-%d %H:%M:%S')
-    
+
     @property
-    def last_boot_datetime(self) -> datetime:
+    def last_boot_datetime(self) -> Optional[datetime]:
         """Parse lastbootuptime as datetime object."""
+        if self.lastbootuptime is None:
+            return None
         return datetime.strptime(self.lastbootuptime, '%Y-%m-%d %H:%M:%S.%f')
 
 
@@ -91,7 +202,7 @@ class MediaAccessDevice:
     
     @classmethod
     def from_dict(cls, data: dict) -> 'MediaAccessDevice':
-        return cls(**data)
+        return _from_dict(cls, data)
 
 
 # ============================================================================
@@ -105,7 +216,7 @@ class FolderShare:
     
     @classmethod
     def from_dict(cls, data: dict) -> 'FolderShare':
-        return cls(**data)
+        return _from_dict(cls, data)
 
 
 # ============================================================================
@@ -121,7 +232,7 @@ class Printer:
     
     @classmethod
     def from_dict(cls, data: dict) -> 'Printer':
-        return cls(**data)
+        return _from_dict(cls, data)
     
     @property
     def is_default(self) -> bool:
@@ -134,15 +245,15 @@ class Printer:
 # ============================================================================
 @dataclass
 class Motherboard:
-    product: str
-    serialnumber: str
-    biosversion: str
-    version: str
-    manufacturer: str
+    product: Optional[str]
+    serialnumber: Optional[str]
+    biosversion: Optional[str]
+    version: Optional[str]
+    manufacturer: Optional[str]
     
     @classmethod
     def from_dict(cls, data: dict) -> 'Motherboard':
-        return cls(**data)
+        return _from_dict(cls, data)
 
 
 # ============================================================================
@@ -151,13 +262,13 @@ class Motherboard:
 @dataclass
 class PhysicalDrive:
     _index: int
-    serialnumber: str
-    modelnumber: str
+    serialnumber: Optional[str]
+    modelnumber: Optional[str]
     capacity: str
     
     @classmethod
     def from_dict(cls, data: dict) -> 'PhysicalDrive':
-        return cls(**data)
+        return _from_dict(cls, data)
     
     @property
     def capacity_gb(self) -> float:
@@ -175,15 +286,15 @@ class PhysicalDrive:
 # ============================================================================
 @dataclass
 class ProcessorDetailed:
-    maxclockspeed: str
-    cpuid: str
+    maxclockspeed: Optional[str]
+    cpuid: Optional[str]
     vendor: Optional[str]
-    description: str
+    description: Optional[str]
     architecture: Optional[str]
     
     @classmethod
     def from_dict(cls, data: dict) -> 'ProcessorDetailed':
-        return cls(**data)
+        return _from_dict(cls, data)
 
 
 # ============================================================================
@@ -193,17 +304,19 @@ class ProcessorDetailed:
 class VideoController:
     _index: int
     name: str
-    videocontrollerid: str
-    description: str
-    adapterram: str
+    videocontrollerid: Optional[str]
+    description: Optional[str]
+    adapterram: Optional[str]
     
     @classmethod
     def from_dict(cls, data: dict) -> 'VideoController':
-        return cls(**data)
+        return _from_dict(cls, data)
     
     @property
-    def adapter_ram_mb(self) -> float:
+    def adapter_ram_mb(self) -> Optional[float]:
         """Convert adapter RAM from bytes to MB."""
+        if self.adapterram is None:
+            return None
         return int(self.adapterram) / (1024**2)
 
 
@@ -220,7 +333,7 @@ class Patch:
     
     @classmethod
     def from_dict(cls, data: dict) -> 'Patch':
-        return cls(**data)
+        return _from_dict(cls, data)
     
     @property
     def is_installed(self) -> bool:
@@ -245,7 +358,7 @@ class SOCustomer:
     
     @classmethod
     def from_dict(cls, data: dict) -> 'SOCustomer':
-        return cls(**data)
+        return _from_dict(cls, data)
 
 
 # ============================================================================
@@ -263,7 +376,7 @@ class ApplicationDetailed:
     
     @classmethod
     def from_dict(cls, data: dict) -> 'ApplicationDetailed':
-        return cls(**data)
+        return _from_dict(cls, data)
     
     @property
     def installation_datetime(self) -> Optional[datetime]:
@@ -284,7 +397,7 @@ class Port:
     
     @classmethod
     def from_dict(cls, data: dict) -> 'Port':
-        return cls(**data)
+        return _from_dict(cls, data)
 
 
 # ============================================================================
@@ -296,12 +409,12 @@ class Service:
     startuptype: str
     caption: str
     servicename: str
-    executablename: str
-    useraccount: str
+    executablename: Optional[str]
+    useraccount: Optional[str]
     
     @classmethod
     def from_dict(cls, data: dict) -> 'Service':
-        return cls(**data)
+        return _from_dict(cls, data)
     
     @property
     def is_auto_start(self) -> bool:
@@ -331,7 +444,7 @@ class ComputerSystemDetailed:
     
     @classmethod
     def from_dict(cls, data: dict) -> 'ComputerSystemDetailed':
-        return cls(**data)
+        return _from_dict(cls, data)
 
 
 # ============================================================================
@@ -341,11 +454,11 @@ class ComputerSystemDetailed:
 class LogicalDevice:
     _index: int
     maxcapacity: str
-    volumename: str
+    volumename: Optional[str]
     
     @classmethod
     def from_dict(cls, data: dict) -> 'LogicalDevice':
-        return cls(**data)
+        return _from_dict(cls, data)
     
     @property
     def capacity_gb(self) -> float:
@@ -363,23 +476,25 @@ class LogicalDevice:
 # ============================================================================
 @dataclass
 class DeviceDetailed:
-    takecontroluuid: str
-    lastloggedinuser_stillloggedin: str
-    lastloggedinuser_sessiontype: str
+    takecontroluuid: Optional[str]
     customerid: str
-    warrantyexpirydate: str
-    lastloggedinuser_domain: str
+    warrantyexpirydate: Optional[str]
     createdon: str
-    lastloggedinuser: str
-    ncentralassettag: str
+    ncentralassettag: Optional[str]
+    lastloggedinuser_stillloggedin: Optional[str]
+    lastloggedinuser_sessiontype: Optional[str]
+    lastloggedinuser_domain: Optional[str]
+    lastloggedinuser: Optional[str]
     
     @classmethod
     def from_dict(cls, data: dict) -> 'DeviceDetailed':
-        return cls(**data)
+        return _from_dict(cls, data)
     
     @property
     def is_user_logged_in(self) -> bool:
         """Check if user is still logged in."""
+        if self.lastloggedinuser_stillloggedin is None:
+            return False
         return self.lastloggedinuser_stillloggedin.lower() == 'true'
     
     @property
@@ -398,7 +513,7 @@ class CustomerDetailed:
     
     @classmethod
     def from_dict(cls, data: dict) -> 'CustomerDetailed':
-        return cls(**data)
+        return _from_dict(cls, data)
 
 
 # ============================================================================
@@ -464,7 +579,7 @@ class OSBasic:
     
     @classmethod
     def from_dict(cls, data: dict) -> 'OSBasic':
-        return cls(**data)
+        return _from_dict(cls, data)
 
 
 # ============================================================================
@@ -477,7 +592,7 @@ class ApplicationBasic:
     
     @classmethod
     def from_dict(cls, data: dict) -> 'ApplicationBasic':
-        return cls(**data)
+        return _from_dict(cls, data)
 
 
 # ============================================================================
@@ -485,7 +600,7 @@ class ApplicationBasic:
 # ============================================================================
 @dataclass
 class ComputerSystemBasic:
-    serialnumber: str
+    serialnumber: Optional[str]
     netbiosname: str
     model: str
     totalphysicalmemory: str
@@ -493,7 +608,7 @@ class ComputerSystemBasic:
     
     @classmethod
     def from_dict(cls, data: dict) -> 'ComputerSystemBasic':
-        return cls(**data)
+        return _from_dict(cls, data)
     
     @property
     def memory_gb(self) -> float:
@@ -508,15 +623,15 @@ class ComputerSystemBasic:
 class NetworkAdapter:
     _index: int
     ipaddress: str
-    dnsserver: str
+    dnsserver: Optional[str]
     description: str
     dhcpserver: Optional[str]
     macaddress: str
-    gateway: str
+    gateway: Optional[str]
     
     @classmethod
     def from_dict(cls, data: dict) -> 'NetworkAdapter':
-        return cls(**data)
+        return _from_dict(cls, data)
     
     @property
     def uses_dhcp(self) -> bool:
@@ -538,7 +653,7 @@ class DeviceBasic:
     
     @classmethod
     def from_dict(cls, data: dict) -> 'DeviceBasic':
-        return cls(**data)
+        return _from_dict(cls, data)
     
     @property
     def is_deleted(self) -> bool:
@@ -562,7 +677,7 @@ class ProcessorBasic:
     
     @classmethod
     def from_dict(cls, data: dict) -> 'ProcessorBasic':
-        return cls(**data)
+        return _from_dict(cls, data)
     
     @property
     def total_cores(self) -> int:
@@ -685,3 +800,8 @@ class DeviceAssets:
     def get_pending_patches(self) -> List[Patch]:
         """Get list of patches not yet installed."""
         return [patch for patch in self.data._extra.patch if not patch.is_installed]
+
+    @property
+    def roles(self) -> List[str]:
+        """Infer installed server roles from Windows services."""
+        return _detect_roles(self.data._extra.service)
