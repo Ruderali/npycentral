@@ -144,6 +144,49 @@ for vol in health['volumes']:
     print(f"  {vol['volume']}: {vol['status']}")
 ```
 
+### Appliance Tasks & Resource Usage
+
+| Method | Description |
+|--------|-------------|
+| `get_appliance_task(task_id)` | Get raw appliance task scan data (generic) |
+| `get_device_disk_usage(device_id, device_name)` | Get disk usage (total/used/free/%) per volume |
+| `get_device_cpu_usage(device_id, device_name)` | Get CPU usage % and top 5 processes |
+| `get_device_memory_usage(device_id, device_name)` | Get physical + virtual memory usage and top 5 processes |
+
+**Example: Disk Usage**
+```python
+disks = client.get_device_disk_usage(device_name="FILESERVER01")
+for disk in disks:
+    print(f"{disk.volume}: {disk.free_gb:.1f} GB free ({disk.usage_percent:.0f}% used)")
+    # C: 90.9 GB free (28% used)
+```
+
+**Example: CPU Usage**
+```python
+cpu = client.get_device_cpu_usage(device_name="DC01")
+print(f"CPU: {cpu.usage_percent}%")
+for proc in cpu.top_processes:
+    print(f"  {proc.name} (PID {proc.pid}): {proc.cpu_usage_percent}%")
+```
+
+**Example: Memory Usage**
+```python
+mem = client.get_device_memory_usage(device_name="DC01")
+print(f"Physical: {mem.physical_used_gb:.1f}/{mem.physical_total_gb:.1f} GB ({mem.physical_usage_percent}%)")
+print(f"Virtual: {mem.virtual_used_gb:.1f}/{mem.virtual_total_gb:.1f} GB ({mem.virtual_usage_percent}%)")
+for proc in mem.top_processes:
+    print(f"  {proc.name}: {proc.physical_mb:.0f} MB")
+```
+
+**Example: Raw Appliance Task (Advanced)**
+```python
+# Get any appliance task by ID for custom parsing
+task = client.get_appliance_task(task_id=1960221156)
+print(f"State: {task.state}, Scanned: {task.scanTime}")
+for detail in task.serviceDetails:
+    print(f"  {detail.detailName}: {detail.detailValue}")
+```
+
 ### Active Issues
 
 | Method | Description |

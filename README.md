@@ -75,6 +75,25 @@ print(f"Last Check-in: {device.last_checkin_datetime}")
 device = client.get_device(device_name="DC01", filter_name="Domain Controllers")
 ```
 
+### Check Disk, CPU, and Memory Usage
+
+```python
+# Disk usage per volume
+disks = client.get_device_disk_usage(device_name="FILESERVER01")
+for disk in disks:
+    print(f"{disk.volume}: {disk.free_gb:.1f} GB free ({disk.usage_percent:.0f}% used)")
+
+# CPU usage with top processes
+cpu = client.get_device_cpu_usage(device_name="DC01")
+print(f"CPU: {cpu.usage_percent}%")
+for proc in cpu.top_processes:
+    print(f"  {proc.name}: {proc.cpu_usage_percent}%")
+
+# Memory usage (physical + virtual)
+mem = client.get_device_memory_usage(device_name="DC01")
+print(f"RAM: {mem.physical_used_gb:.1f}/{mem.physical_total_gb:.1f} GB ({mem.physical_usage_percent}%)")
+```
+
 ### Check Disk Health
 
 ```python
