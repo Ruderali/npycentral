@@ -119,7 +119,7 @@ class NCentralClient(DeviceMixin, CustomerMixin, TaskMixin, PropertyMixin, Filte
                 raise APIError(
                     f"Authentication request failed: {e}",
                     status_code=e.response.status_code,
-                    response=e.response.json() if e.response else None
+                    response=e.response.json() if e.response is not None else None
                 )
         except requests.RequestException as e:
             logger.error(f"Authentication request error: {e}")
@@ -221,19 +221,19 @@ class NCentralClient(DeviceMixin, CustomerMixin, TaskMixin, PropertyMixin, Filte
                 raise NotFoundError(
                     f"Resource not found: {endpoint}",
                     status_code=404,
-                    response=e.response.json() if e.response else None
+                    response=e.response.json() if e.response is not None else None
                 )
             elif e.response.status_code == 429:
                 raise RateLimitError(
                     f"Rate limit exceeded for {endpoint}",
                     status_code=429,
-                    response=e.response.json() if e.response else None
+                    response=e.response.json() if e.response is not None else None
                 )
             else:
                 raise APIError(
                     f"API request failed for {endpoint}: {e}",
                     status_code=e.response.status_code,
-                    response=e.response.json() if e.response else None
+                    response=e.response.json() if e.response is not None else None
                 )
         except requests.RequestException as e:
             logger.error(f"Request failed for GET {endpoint}: {e}")
@@ -338,7 +338,7 @@ class NCentralClient(DeviceMixin, CustomerMixin, TaskMixin, PropertyMixin, Filte
                 raise APIError(
                     f"POST request failed for {endpoint}: {e}",
                     status_code=e.response.status_code,
-                    response=e.response.json() if e.response else None
+                    response=e.response.json() if e.response is not None else None
                 )
         except requests.RequestException as e:
             logger.error(f"Request failed for POST {endpoint}: {e}")
@@ -384,7 +384,7 @@ class NCentralClient(DeviceMixin, CustomerMixin, TaskMixin, PropertyMixin, Filte
                 raise APIError(
                     f"PUT request failed for {endpoint}: {e}",
                     status_code=e.response.status_code,
-                    response=e.response.json() if e.response else None
+                    response=e.response.json() if e.response is not None else None
                 )
         except requests.RequestException as e:
             logger.error(f"Request failed for PUT {endpoint}: {e}")
@@ -430,7 +430,7 @@ class NCentralClient(DeviceMixin, CustomerMixin, TaskMixin, PropertyMixin, Filte
                 raise APIError(
                     f"PATCH request failed for {endpoint}: {e}",
                     status_code=e.response.status_code,
-                    response=e.response.json() if e.response else None
+                    response=e.response.json() if e.response is not None else None
                 )
         except requests.RequestException as e:
             logger.error(f"Request failed for PATCH {endpoint}: {e}")
@@ -474,7 +474,7 @@ class NCentralClient(DeviceMixin, CustomerMixin, TaskMixin, PropertyMixin, Filte
                 raise APIError(
                     f"DELETE request failed for {endpoint}: {e}",
                     status_code=e.response.status_code,
-                    response=e.response.json() if e.response else None
+                    response=e.response.json() if e.response is not None else None
                 )
         except requests.RequestException as e:
             logger.error(f"Request failed for DELETE {endpoint}: {e}")

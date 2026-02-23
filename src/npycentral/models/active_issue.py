@@ -144,7 +144,9 @@ class ActiveIssue:
             3: "WARNING",
             4: "WARNING",
             5: "CRITICAL",
-            6: "FAILED"
+            6: "FAILED",
+            7: "DISCONNECTED",
+            8: "DISABLED"
         }
         state = state_labels.get(self.notificationState, f"STATE_{self.notificationState}")
         return f"[{state}] {self.serviceName} on {self.device_name or f'Device {self.deviceId}'}"
