@@ -85,6 +85,27 @@ print(f"Device ID: {device.deviceId}")
 print(f"Customer ID: {device.customerId}")
 ```
 
+### Device Lifecycle
+
+| Method | Description |
+|--------|-------------|
+| `delete_device(device_id, device_name, remove_agents)` | Delete a device from N-Central |
+
+**Example: Delete by ID**
+```python
+client.delete_device(device_id=12345)
+```
+
+**Example: Delete by Name**
+```python
+client.delete_device(device_name="OLD-WORKSTATION01")
+```
+
+**Example: Delete and Remove Agents**
+```python
+client.delete_device(device_id=12345, remove_agents=True)
+```
+
 ### Device Assets
 
 | Method | Description |

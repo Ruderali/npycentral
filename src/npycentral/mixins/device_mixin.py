@@ -914,6 +914,43 @@ class DeviceMixin:
         }
 
     # ========================================================================
+    # DEVICE LIFECYCLE METHODS
+    # ========================================================================
+
+    def delete_device(
+        self,
+        device_id: Optional[int] = None,
+        device_name: Optional[str] = None,
+        remove_agents: bool = False
+    ) -> bool:
+        """
+        Delete a device from N-Central.
+
+        Args:
+            device_id: Device ID to delete (takes priority over device_name)
+            device_name: Device name to delete (resolved via cache)
+            remove_agents: If True, also remove agents from the device
+
+        Returns:
+            bool: True on success
+
+        Raises:
+            ValueError: If neither device_id nor device_name provided
+            NotFoundError: If device_name provided but not found
+            APIError: If the API request fails
+
+        Example:
+            nc.delete_device(device_id=12345)
+            nc.delete_device(device_name="DC01", remove_agents=True)
+        """
+        resolved_device_id = self._resolve_device_id(device_id, device_name)
+        logger.info(f"Deleting device {resolved_device_id} (remove_agents={remove_agents})")
+        params = {"removeAgents": "true"} if remove_agents else None
+        self.delete(f"devices/{resolved_device_id}", params=params)
+        self.clear_device_cache()
+        return True
+
+    # ========================================================================
     # APPLIANCE TASK METHODS
     # ========================================================================
 
