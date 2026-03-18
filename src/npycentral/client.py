@@ -1,5 +1,6 @@
 """N-Central API Client with modular functionality via mixins."""
 import logging
+import time
 from typing import Any, Dict, Optional
 import requests
 from cachetools import TTLCache
@@ -49,7 +50,9 @@ class NCentralClient(DeviceMixin, CustomerMixin, TaskMixin, PropertyMixin, Filte
         base_so_id: str = "50", # Default Service Organization ID for servers with a single SO
         default_timezone: str = "UTC",
         ui_port: int = 8443,
-        token_ttl: int = 3600
+        token_ttl: int = 3600,
+        max_retries: int = 3,
+        retry_backoff_base: int = 2,
     ):
         """
         Initialize N-Central API client.
@@ -61,6 +64,8 @@ class NCentralClient(DeviceMixin, CustomerMixin, TaskMixin, PropertyMixin, Filte
             default_timezone: IANA timezone name for datetime operations
             ui_port: N-Central UI port (default: 8443)
             token_ttl: Access token cache TTL in seconds (default: 3600)
+            max_retries: Number of retries on 429 rate limit responses (default: 3)
+            retry_backoff_base: Base for exponential backoff in seconds (default: 2 → 2s, 4s, 8s)
 
         Raises:
             ValueError: If base_url or jwt are not provided
@@ -77,6 +82,10 @@ class NCentralClient(DeviceMixin, CustomerMixin, TaskMixin, PropertyMixin, Filte
         # Configuration
         self.default_timezone = ZoneInfo(default_timezone)
         self.cache = TTLCache(maxsize=2, ttl=token_ttl)
+
+        # Retry configuration
+        self.max_retries = max_retries
+        self.retry_backoff_base = retry_backoff_base
 
     def __repr__(self) -> str:
         return f"NCentralClient(base_url='{self.base_url}')"
@@ -209,35 +218,41 @@ class NCentralClient(DeviceMixin, CustomerMixin, TaskMixin, PropertyMixin, Filte
         url = f"{self.base_url}/api/{endpoint}"
         headers = {"Authorization": f"Bearer {self.get_token()}"}
 
-        try:
-            response = requests.get(url, headers=headers, params=params or {})
-            response.raise_for_status()
-            return response.json()
-        except requests.HTTPError as e:
-            logger.error(f"HTTP error for GET {endpoint}: {e}")
-            if e.response.status_code == 401:
-                raise AuthenticationError(f"Authentication failed for {endpoint}: {e}")
-            elif e.response.status_code == 404:
-                raise NotFoundError(
-                    f"Resource not found: {endpoint}",
-                    status_code=404,
-                    response=e.response.json() if e.response is not None else None
-                )
-            elif e.response.status_code == 429:
-                raise RateLimitError(
-                    f"Rate limit exceeded for {endpoint}",
-                    status_code=429,
-                    response=e.response.json() if e.response is not None else None
-                )
-            else:
-                raise APIError(
-                    f"API request failed for {endpoint}: {e}",
-                    status_code=e.response.status_code,
-                    response=e.response.json() if e.response is not None else None
-                )
-        except requests.RequestException as e:
-            logger.error(f"Request failed for GET {endpoint}: {e}")
-            raise APIError(f"Network error for {endpoint}: {e}")
+        for attempt in range(self.max_retries + 1):
+            try:
+                response = requests.get(url, headers=headers, params=params or {})
+                response.raise_for_status()
+                return response.json()
+            except requests.HTTPError as e:
+                if e.response.status_code == 429 and attempt < self.max_retries:
+                    wait = self.retry_backoff_base ** attempt
+                    logger.warning(f"Rate limited on GET {endpoint}, retrying in {wait}s (attempt {attempt + 1}/{self.max_retries})")
+                    time.sleep(wait)
+                    continue
+                logger.error(f"HTTP error for GET {endpoint}: {e}")
+                if e.response.status_code == 401:
+                    raise AuthenticationError(f"Authentication failed for {endpoint}: {e}")
+                elif e.response.status_code == 404:
+                    raise NotFoundError(
+                        f"Resource not found: {endpoint}",
+                        status_code=404,
+                        response=e.response.json() if e.response is not None else None
+                    )
+                elif e.response.status_code == 429:
+                    raise RateLimitError(
+                        f"Rate limit exceeded for {endpoint} after {self.max_retries} retries",
+                        status_code=429,
+                        response=e.response.json() if e.response is not None else None
+                    )
+                else:
+                    raise APIError(
+                        f"API request failed for {endpoint}: {e}",
+                        status_code=e.response.status_code,
+                        response=e.response.json() if e.response is not None else None
+                    )
+            except requests.RequestException as e:
+                logger.error(f"Request failed for GET {endpoint}: {e}")
+                raise APIError(f"Network error for {endpoint}: {e}")
 
     def get_all(
         self,
@@ -319,30 +334,35 @@ class NCentralClient(DeviceMixin, CustomerMixin, TaskMixin, PropertyMixin, Filte
             "Content-Type": "application/json"
         }
 
-        try:
-            response = requests.post(url, headers=headers, json=data)
-            response.raise_for_status()
-            return response.json()
-        except requests.HTTPError as e:
-            logger.error(f"HTTP error for POST {endpoint}: {e}")
-            if hasattr(e, 'response') and e.response is not None:
-                try:
-                    error_detail = e.response.json()
-                    logger.debug(f"Error details: {error_detail}")
-                except Exception:
-                    logger.debug(f"Response content: {e.response.text}")
-
-            if e.response.status_code == 401:
-                raise AuthenticationError(f"Authentication failed for {endpoint}: {e}")
-            else:
-                raise APIError(
-                    f"POST request failed for {endpoint}: {e}",
-                    status_code=e.response.status_code,
-                    response=e.response.json() if e.response is not None else None
-                )
-        except requests.RequestException as e:
-            logger.error(f"Request failed for POST {endpoint}: {e}")
-            raise APIError(f"Network error for {endpoint}: {e}")
+        for attempt in range(self.max_retries + 1):
+            try:
+                response = requests.post(url, headers=headers, json=data)
+                response.raise_for_status()
+                return response.json()
+            except requests.HTTPError as e:
+                if e.response.status_code == 429 and attempt < self.max_retries:
+                    wait = self.retry_backoff_base ** attempt
+                    logger.warning(f"Rate limited on POST {endpoint}, retrying in {wait}s (attempt {attempt + 1}/{self.max_retries})")
+                    time.sleep(wait)
+                    continue
+                logger.error(f"HTTP error for POST {endpoint}: {e}")
+                if hasattr(e, 'response') and e.response is not None:
+                    try:
+                        error_detail = e.response.json()
+                        logger.debug(f"Error details: {error_detail}")
+                    except Exception:
+                        logger.debug(f"Response content: {e.response.text}")
+                if e.response.status_code == 401:
+                    raise AuthenticationError(f"Authentication failed for {endpoint}: {e}")
+                else:
+                    raise APIError(
+                        f"POST request failed for {endpoint}: {e}",
+                        status_code=e.response.status_code,
+                        response=e.response.json() if e.response is not None else None
+                    )
+            except requests.RequestException as e:
+                logger.error(f"Request failed for POST {endpoint}: {e}")
+                raise APIError(f"Network error for {endpoint}: {e}")
 
     def put(self, endpoint: str, data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -365,30 +385,35 @@ class NCentralClient(DeviceMixin, CustomerMixin, TaskMixin, PropertyMixin, Filte
             "Content-Type": "application/json"
         }
 
-        try:
-            response = requests.put(url, headers=headers, json=data)
-            response.raise_for_status()
-            return response.json()
-        except requests.HTTPError as e:
-            logger.error(f"HTTP error for PUT {endpoint}: {e}")
-            if hasattr(e, 'response') and e.response is not None:
-                try:
-                    error_detail = e.response.json()
-                    logger.debug(f"Error details: {error_detail}")
-                except Exception:
-                    logger.debug(f"Response content: {e.response.text}")
-
-            if e.response.status_code == 401:
-                raise AuthenticationError(f"Authentication failed for {endpoint}: {e}")
-            else:
-                raise APIError(
-                    f"PUT request failed for {endpoint}: {e}",
-                    status_code=e.response.status_code,
-                    response=e.response.json() if e.response is not None else None
-                )
-        except requests.RequestException as e:
-            logger.error(f"Request failed for PUT {endpoint}: {e}")
-            raise APIError(f"Network error for {endpoint}: {e}")
+        for attempt in range(self.max_retries + 1):
+            try:
+                response = requests.put(url, headers=headers, json=data)
+                response.raise_for_status()
+                return response.json()
+            except requests.HTTPError as e:
+                if e.response.status_code == 429 and attempt < self.max_retries:
+                    wait = self.retry_backoff_base ** attempt
+                    logger.warning(f"Rate limited on PUT {endpoint}, retrying in {wait}s (attempt {attempt + 1}/{self.max_retries})")
+                    time.sleep(wait)
+                    continue
+                logger.error(f"HTTP error for PUT {endpoint}: {e}")
+                if hasattr(e, 'response') and e.response is not None:
+                    try:
+                        error_detail = e.response.json()
+                        logger.debug(f"Error details: {error_detail}")
+                    except Exception:
+                        logger.debug(f"Response content: {e.response.text}")
+                if e.response.status_code == 401:
+                    raise AuthenticationError(f"Authentication failed for {endpoint}: {e}")
+                else:
+                    raise APIError(
+                        f"PUT request failed for {endpoint}: {e}",
+                        status_code=e.response.status_code,
+                        response=e.response.json() if e.response is not None else None
+                    )
+            except requests.RequestException as e:
+                logger.error(f"Request failed for PUT {endpoint}: {e}")
+                raise APIError(f"Network error for {endpoint}: {e}")
 
     def patch(self, endpoint: str, data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -411,37 +436,44 @@ class NCentralClient(DeviceMixin, CustomerMixin, TaskMixin, PropertyMixin, Filte
             "Content-Type": "application/json"
         }
 
-        try:
-            response = requests.patch(url, headers=headers, json=data)
-            response.raise_for_status()
-            return response.json()
-        except requests.HTTPError as e:
-            logger.error(f"HTTP error for PATCH {endpoint}: {e}")
-            if hasattr(e, 'response') and e.response is not None:
-                try:
-                    error_detail = e.response.json()
-                    logger.debug(f"Error details: {error_detail}")
-                except Exception:
-                    logger.debug(f"Response content: {e.response.text}")
+        for attempt in range(self.max_retries + 1):
+            try:
+                response = requests.patch(url, headers=headers, json=data)
+                response.raise_for_status()
+                return response.json()
+            except requests.HTTPError as e:
+                if e.response.status_code == 429 and attempt < self.max_retries:
+                    wait = self.retry_backoff_base ** attempt
+                    logger.warning(f"Rate limited on PATCH {endpoint}, retrying in {wait}s (attempt {attempt + 1}/{self.max_retries})")
+                    time.sleep(wait)
+                    continue
+                logger.error(f"HTTP error for PATCH {endpoint}: {e}")
+                if hasattr(e, 'response') and e.response is not None:
+                    try:
+                        error_detail = e.response.json()
+                        logger.debug(f"Error details: {error_detail}")
+                    except Exception:
+                        logger.debug(f"Response content: {e.response.text}")
+                if e.response.status_code == 401:
+                    raise AuthenticationError(f"Authentication failed for {endpoint}: {e}")
+                else:
+                    raise APIError(
+                        f"PATCH request failed for {endpoint}: {e}",
+                        status_code=e.response.status_code,
+                        response=e.response.json() if e.response is not None else None
+                    )
+            except requests.RequestException as e:
+                logger.error(f"Request failed for PATCH {endpoint}: {e}")
+                raise APIError(f"Network error for {endpoint}: {e}")
 
-            if e.response.status_code == 401:
-                raise AuthenticationError(f"Authentication failed for {endpoint}: {e}")
-            else:
-                raise APIError(
-                    f"PATCH request failed for {endpoint}: {e}",
-                    status_code=e.response.status_code,
-                    response=e.response.json() if e.response is not None else None
-                )
-        except requests.RequestException as e:
-            logger.error(f"Request failed for PATCH {endpoint}: {e}")
-            raise APIError(f"Network error for {endpoint}: {e}")
-
-    def delete(self, endpoint: str) -> Dict[str, Any]:
+    def delete(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Perform a DELETE request.
 
         Args:
             endpoint: API endpoint (without /api/ prefix)
+            params: Query parameters for the request
+
 
         Returns:
             dict: JSON response from the API, or {"success": True} if no content
@@ -453,29 +485,34 @@ class NCentralClient(DeviceMixin, CustomerMixin, TaskMixin, PropertyMixin, Filte
         url = f"{self.base_url}/api/{endpoint}"
         headers = {"Authorization": f"Bearer {self.get_token()}"}
 
-        try:
-            response = requests.delete(url, headers=headers)
-            response.raise_for_status()
-            if response.text:
-                return response.json()
-            return {"success": True}
-        except requests.HTTPError as e:
-            logger.error(f"HTTP error for DELETE {endpoint}: {e}")
-            if hasattr(e, 'response') and e.response is not None:
-                try:
-                    error_detail = e.response.json()
-                    logger.debug(f"Error details: {error_detail}")
-                except Exception:
-                    logger.debug(f"Response content: {e.response.text}")
-
-            if e.response.status_code == 401:
-                raise AuthenticationError(f"Authentication failed for {endpoint}: {e}")
-            else:
-                raise APIError(
-                    f"DELETE request failed for {endpoint}: {e}",
-                    status_code=e.response.status_code,
-                    response=e.response.json() if e.response is not None else None
-                )
-        except requests.RequestException as e:
-            logger.error(f"Request failed for DELETE {endpoint}: {e}")
-            raise APIError(f"Network error for {endpoint}: {e}")
+        for attempt in range(self.max_retries + 1):
+            try:
+                response = requests.delete(url, headers=headers, params=params)
+                response.raise_for_status()
+                if response.text:
+                    return response.json()
+                return {"success": True}
+            except requests.HTTPError as e:
+                if e.response.status_code == 429 and attempt < self.max_retries:
+                    wait = self.retry_backoff_base ** attempt
+                    logger.warning(f"Rate limited on DELETE {endpoint}, retrying in {wait}s (attempt {attempt + 1}/{self.max_retries})")
+                    time.sleep(wait)
+                    continue
+                logger.error(f"HTTP error for DELETE {endpoint}: {e}")
+                if hasattr(e, 'response') and e.response is not None:
+                    try:
+                        error_detail = e.response.json()
+                        logger.debug(f"Error details: {error_detail}")
+                    except Exception:
+                        logger.debug(f"Response content: {e.response.text}")
+                if e.response.status_code == 401:
+                    raise AuthenticationError(f"Authentication failed for {endpoint}: {e}")
+                else:
+                    raise APIError(
+                        f"DELETE request failed for {endpoint}: {e}",
+                        status_code=e.response.status_code,
+                        response=e.response.json() if e.response is not None else None
+                    )
+            except requests.RequestException as e:
+                logger.error(f"Request failed for DELETE {endpoint}: {e}")
+                raise APIError(f"Network error for {endpoint}: {e}")

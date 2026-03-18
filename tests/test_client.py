@@ -2,6 +2,7 @@
 import pytest
 import requests
 import responses
+from unittest.mock import patch, call
 from zoneinfo import ZoneInfo
 
 from npycentral.client import NCentralClient, SecretString
@@ -263,8 +264,9 @@ class TestGet:
             json={"error": "rate limited"},
             status=429,
         )
-        with pytest.raises(RateLimitError):
-            client.get("devices")
+        with patch("npycentral.client.time.sleep"):
+            with pytest.raises(RateLimitError):
+                client.get("devices")
 
     def test_get_500_raises_api_error(self, activate_responses, client):
         activate_responses.add(
@@ -641,3 +643,103 @@ class TestDelete:
         )
         with pytest.raises(APIError):
             client.delete("devices/1")
+
+
+# ========================================================================
+# RETRY BEHAVIOUR TESTS
+# ========================================================================
+
+class TestRetryBehaviour:
+    """Verify 429 retry with exponential backoff across all HTTP methods."""
+
+    @pytest.fixture
+    def retry_client(self):
+        """Client with max_retries=2 and retry_backoff_base=2 for predictable backoff values."""
+        return NCentralClient(
+            base_url=BASE_URL,
+            jwt=TEST_JWT,
+            max_retries=2,
+            retry_backoff_base=2,
+        )
+
+    # --- Constructor defaults ---
+
+    def test_default_max_retries(self, client):
+        assert client.max_retries == 3
+
+    def test_default_retry_backoff_base(self, client):
+        assert client.retry_backoff_base == 2
+
+    def test_custom_retry_settings(self):
+        c = NCentralClient(base_url=BASE_URL, jwt=TEST_JWT, max_retries=5, retry_backoff_base=3)
+        assert c.max_retries == 5
+        assert c.retry_backoff_base == 3
+
+    # --- GET retries ---
+
+    def test_get_retries_on_429_then_succeeds(self, activate_responses, retry_client):
+        activate_responses.add(responses.GET, f"{BASE_URL}/api/devices", json={"error": "rate limited"}, status=429)
+        activate_responses.add(responses.GET, f"{BASE_URL}/api/devices", json={"data": []}, status=200)
+        with patch("npycentral.client.time.sleep"):
+            result = retry_client.get("devices")
+        assert result == {"data": []}
+
+    def test_get_raises_rate_limit_error_after_exhausting_retries(self, activate_responses, retry_client):
+        activate_responses.add(responses.GET, f"{BASE_URL}/api/devices", json={"error": "rate limited"}, status=429)
+        with patch("npycentral.client.time.sleep"):
+            with pytest.raises(RateLimitError):
+                retry_client.get("devices")
+
+    def test_get_makes_correct_number_of_attempts(self, activate_responses, retry_client):
+        activate_responses.add(responses.GET, f"{BASE_URL}/api/devices", json={"error": "rate limited"}, status=429)
+        with patch("npycentral.client.time.sleep"):
+            with pytest.raises(RateLimitError):
+                retry_client.get("devices")
+        get_calls = [c for c in activate_responses.calls if c.request.method == "GET"]
+        assert len(get_calls) == 3  # initial + 2 retries
+
+    def test_get_sleeps_with_exponential_backoff(self, activate_responses, retry_client):
+        activate_responses.add(responses.GET, f"{BASE_URL}/api/devices", json={"error": "rate limited"}, status=429)
+        with patch("npycentral.client.time.sleep") as mock_sleep:
+            with pytest.raises(RateLimitError):
+                retry_client.get("devices")
+        assert mock_sleep.call_args_list == [call(1), call(2)]  # 2^0, 2^1
+
+    def test_get_non_429_does_not_retry(self, activate_responses, retry_client):
+        activate_responses.add(responses.GET, f"{BASE_URL}/api/devices/999", json={"error": "not found"}, status=404)
+        with patch("npycentral.client.time.sleep") as mock_sleep:
+            with pytest.raises(NotFoundError):
+                retry_client.get("devices/999")
+        mock_sleep.assert_not_called()
+        get_calls = [c for c in activate_responses.calls if c.request.method == "GET"]
+        assert len(get_calls) == 1
+
+    # --- POST / PUT / PATCH / DELETE each get one retry smoke test ---
+
+    def test_post_retries_on_429_then_succeeds(self, activate_responses, retry_client):
+        activate_responses.add(responses.POST, f"{BASE_URL}/api/tasks", json={"error": "rate limited"}, status=429)
+        activate_responses.add(responses.POST, f"{BASE_URL}/api/tasks", json={"taskId": 1}, status=200)
+        with patch("npycentral.client.time.sleep"):
+            result = retry_client.post("tasks", data={})
+        assert result == {"taskId": 1}
+
+    def test_put_retries_on_429_then_succeeds(self, activate_responses, retry_client):
+        activate_responses.add(responses.PUT, f"{BASE_URL}/api/devices/1", json={"error": "rate limited"}, status=429)
+        activate_responses.add(responses.PUT, f"{BASE_URL}/api/devices/1", json={"updated": True}, status=200)
+        with patch("npycentral.client.time.sleep"):
+            result = retry_client.put("devices/1", data={})
+        assert result == {"updated": True}
+
+    def test_patch_retries_on_429_then_succeeds(self, activate_responses, retry_client):
+        activate_responses.add(responses.PATCH, f"{BASE_URL}/api/devices/1", json={"error": "rate limited"}, status=429)
+        activate_responses.add(responses.PATCH, f"{BASE_URL}/api/devices/1", json={"patched": True}, status=200)
+        with patch("npycentral.client.time.sleep"):
+            result = retry_client.patch("devices/1", data={})
+        assert result == {"patched": True}
+
+    def test_delete_retries_on_429_then_succeeds(self, activate_responses, retry_client):
+        activate_responses.add(responses.DELETE, f"{BASE_URL}/api/devices/1", json={"error": "rate limited"}, status=429)
+        activate_responses.add(responses.DELETE, f"{BASE_URL}/api/devices/1", body="", status=204)
+        with patch("npycentral.client.time.sleep"):
+            result = retry_client.delete("devices/1")
+        assert result == {"success": True}

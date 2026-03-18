@@ -158,6 +158,17 @@ print(f"Remote Control: {remote_url}")
 
 - **Device lists are cached.** By default, device lists are cached for 5 minutes to avoid hammering the API. You can clear the cache with `client.clear_device_cache()` or adjust the TTL with `client.set_device_cache_ttl(seconds)`.
 
+- **Rate limiting is handled automatically.** The N-Central API enforces concurrent call limits per endpoint and returns HTTP 429 when exceeded. The client retries automatically with exponential backoff (default: 3 retries, waits of 1s → 2s → 4s). You can tune this at init time:
+
+```python
+client = NCentralClient(
+    base_url="https://ncentral.example.com",
+    jwt="your-jwt",
+    max_retries=5,        # retries before raising RateLimitError (default: 3)
+    retry_backoff_base=3  # backoff in seconds: 1s, 3s, 9s, 27s, 81s (default: 2)
+)
+```
+
 ## API Reference
 
 See [docs/api-reference.md](docs/api-reference.md) for the complete function reference.
