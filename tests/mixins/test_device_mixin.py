@@ -348,9 +348,23 @@ class TestFindDevicesByName:
 
 
 class TestFindDevicesByCustomer:
-    """Verify find_devices_by_customer() filters by customerId."""
+    """Verify find_devices_by_customer() uses org-unit scoped endpoint."""
 
     def test_filters_by_customer_id(self, activate_responses, client):
+        activate_responses.add(
+            responses.GET,
+            f"{BASE_URL}/api/org-units/237/devices",
+            json=make_paginated_response([
+                make_device_data(device_id=12345, customer_id=237),
+                make_device_data(device_id=12347, customer_id=237),
+            ]),
+            status=200,
+        )
+        result = client.find_devices_by_customer(237)
+        assert len(result) == 2
+        assert all(d.customerId == 237 for d in result)
+
+    def test_falls_back_to_filter_when_filter_id_given(self, activate_responses, client):
         activate_responses.add(
             responses.GET,
             f"{BASE_URL}/api/devices",
@@ -361,15 +375,29 @@ class TestFindDevicesByCustomer:
             ]),
             status=200,
         )
-        result = client.find_devices_by_customer(237)
+        result = client.find_devices_by_customer(237, filter_id=1)
         assert len(result) == 2
         assert all(d.customerId == 237 for d in result)
 
 
 class TestFindDevicesBySite:
-    """Verify find_devices_by_site() filters by siteId."""
+    """Verify find_devices_by_site() uses org-unit scoped endpoint."""
 
     def test_filters_by_site_id(self, activate_responses, client):
+        activate_responses.add(
+            responses.GET,
+            f"{BASE_URL}/api/org-units/500/devices",
+            json=make_paginated_response([
+                make_device_data(device_id=12345, site_id=500),
+                make_device_data(device_id=12347, site_id=500),
+            ]),
+            status=200,
+        )
+        result = client.find_devices_by_site(500)
+        assert len(result) == 2
+        assert all(d.siteId == 500 for d in result)
+
+    def test_falls_back_to_filter_when_filter_id_given(self, activate_responses, client):
         activate_responses.add(
             responses.GET,
             f"{BASE_URL}/api/devices",
@@ -380,7 +408,7 @@ class TestFindDevicesBySite:
             ]),
             status=200,
         )
-        result = client.find_devices_by_site(500)
+        result = client.find_devices_by_site(500, filter_id=1)
         assert len(result) == 2
         assert all(d.siteId == 500 for d in result)
 

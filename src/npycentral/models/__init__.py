@@ -21,6 +21,10 @@ from .appliance_task import (
     TopCpuProcess,
     TopMemoryProcess,
 )
+from .site import Site
+from .device_class import DeviceClass, DEVICE_CLASSES
+from .maintenance_window import MaintenanceWindow
+from .scheduled_task import ScheduledTask
 
 __all__ = [
     'ApplianceTask',
@@ -30,9 +34,14 @@ __all__ = [
     'Customer',
     'Device',
     'DeviceAssets',
+    'DeviceClass',
+    'DEVICE_CLASSES',
     'DeviceFilter',
     'DiskUsage',
+    'MaintenanceWindow',
     'MemoryUsage',
+    'ScheduledTask',
+    'Site',
     'TopCpuProcess',
     'TopMemoryProcess',
     'ActiveIssue',
