@@ -1,23 +1,16 @@
-"""Device-related API methods with lazy-loaded caching."""
+"""Core device discovery, caching, and lifecycle methods."""
 import logging
 from typing import List, Optional, Union
 from cachetools import TTLCache
 
-from ..models import (
-    Device,
-    ActiveIssue,
-    DeviceAssets,
-    ServiceMonitoringStatus,
-    ServiceMonitoringCollection
-)
-from ..models.appliance_task import ApplianceTask, CpuUsage, DiskUsage, MemoryUsage
+from ..models import Device
 from ..exceptions import NotFoundError
 
 logger = logging.getLogger(__name__)
 
 
 class DeviceMixin:
-    """Device-related API methods with lazy-loaded caching."""
+    """Core device discovery, caching, and lifecycle methods."""
 
     # ========================================================================
     # HELPER METHODS FOR RESOLVING NAMES TO IDS
@@ -126,10 +119,8 @@ class DeviceMixin:
     def _init_device_cache(self):
         """Initialize device cache if not already present."""
         if not hasattr(self, '_device_cache'):
-            # Cache key format: "devices_{filter_id}" or "devices_None" for all devices
-            # TTL of 300 seconds (5 minutes) by default
             self._device_cache = TTLCache(maxsize=50, ttl=300)
-            self._device_cache_ttl = 300  # Can be overridden
+            self._device_cache_ttl = 300
             logger.debug("Initialized device cache with TTL=300s")
 
     def set_device_cache_ttl(self, ttl_seconds: int):
@@ -225,6 +216,64 @@ class DeviceMixin:
         return [Device.from_dict(device, timezone=self.default_timezone, client=self)
                 for device in devices_data]
 
+    def _fetch_devices_for_org_unit(
+        self,
+        org_unit_id: int,
+        pagesize: int = 50,
+        max_pages: Optional[int] = None
+    ) -> List[Device]:
+        """
+        Fetch devices scoped to a specific org unit (customer or site) from the API.
+
+        Uses GET /api/org-units/{orgUnitId}/devices which is server-side scoped,
+        avoiding the need to fetch all devices and filter client-side.
+
+        Args:
+            org_unit_id: Org unit ID (customerId or siteId — both are org units)
+            pagesize: Results per page
+            max_pages: Maximum pages to fetch
+
+        Returns:
+            list: List of Device objects for that org unit
+        """
+        logger.debug(f"Fetching devices for org unit {org_unit_id}")
+        devices_data = self.get_all(
+            f"org-units/{org_unit_id}/devices",
+            pagesize=pagesize,
+            max_pages=max_pages
+        )
+        logger.info(f"Fetched {len(devices_data)} devices for org unit {org_unit_id}")
+        return [Device.from_dict(device, timezone=self.default_timezone, client=self)
+                for device in devices_data]
+
+    def _get_cached_devices_for_org_unit(
+        self,
+        org_unit_id: int,
+        pagesize: int = 50,
+        use_cache: bool = True,
+        max_pages: Optional[int] = None
+    ) -> List[Device]:
+        """
+        Get devices scoped to an org unit, with caching support.
+
+        Cache key: "devices_orgunit_{org_unit_id}"
+        """
+        if not use_cache:
+            return self._fetch_devices_for_org_unit(org_unit_id, pagesize, max_pages)
+
+        self._init_device_cache()
+        cache_key = f"devices_orgunit_{org_unit_id}"
+
+        if cache_key not in self._device_cache:
+            logger.debug(f"Cache miss for {cache_key}, fetching from API")
+            self._device_cache[cache_key] = self._fetch_devices_for_org_unit(
+                org_unit_id, pagesize, max_pages
+            )
+        else:
+            logger.debug(f"Cache hit for {cache_key}")
+
+        return self._device_cache[cache_key]
+
     # ========================================================================
     # CORE DEVICE METHODS
     # ========================================================================
@@ -233,42 +282,101 @@ class DeviceMixin:
         self,
         filter_id: Optional[int] = None,
         filter_name: Optional[str] = None,
+        customer_id: Optional[int] = None,
+        customer_name: Optional[str] = None,
+        site_id: Optional[int] = None,
+        device_class: Optional[str] = None,
+        os_type: Optional[str] = None,
         pagesize: int = 50,
         use_cache: bool = False,
-        max_pages: Optional[int] = None
+        max_pages: Optional[int] = None,
     ) -> List[Device]:
         """
-        Get all devices with optional filtering and caching.
+        Get devices with optional server-side filter and client-side attribute filters.
+
+        The N-Central REST API only supports server-side filtering by filterId.
+        All other parameters (customer_id, site_id, device_class, os_type) are
+        applied as client-side filters on the fetched device list.
 
         Args:
-            filter_id: Optional filter ID (takes priority over filter_name)
-            filter_name: Optional filter name (resolved to ID automatically)
-            pagesize: Results per page
-            use_cache: Whether to use cache (default: False for backwards compatibility)
-            max_pages: Maximum number of pages to fetch (None for all)
+            filter_id: N-Central filter ID (server-side, takes priority over filter_name)
+            filter_name: N-Central filter name (resolved to ID automatically)
+            customer_id: Only return devices belonging to this customer (client-side)
+            customer_name: Resolve customer by name, then filter (client-side)
+            site_id: Only return devices at this site (client-side)
+            device_class: Filter by device class label, e.g. "Server", "Workstation" (client-side,
+                          case-insensitive substring match on deviceClass or deviceClassLabel)
+            os_type: Filter by OS, e.g. "Windows", "Linux", "Mac" (client-side,
+                     case-insensitive substring match on supportedOs or supportedOsLabel)
+            pagesize: Results per page for the initial API fetch
+            use_cache: Whether to use the device cache (default: False)
+            max_pages: Maximum pages to fetch from the API (None for all)
 
         Returns:
-            list: List of Device objects
+            list: List of Device objects matching all specified filters
 
         Raises:
-            NotFoundError: If filter_name provided but not found
+            NotFoundError: If filter_name or customer_name provided but not found
             APIError: If the API request fails
 
         Example:
-            # Get all devices
-            devices = nc.get_devices()
+            # All servers for a customer
+            servers = nc.get_devices(customer_name="Acme Corp", device_class="Server")
 
-            # Get devices by filter name
+            # Windows devices at a specific site
+            devices = nc.get_devices(site_id=99, os_type="Windows")
+
+            # Scoped fetch using an N-Central filter
             dcs = nc.get_devices(filter_name="Domain Controllers")
-
-            # Get devices by filter ID
-            dcs = nc.get_devices(filter_id=83)
-
-            # Get first page only
-            dcs = nc.get_devices(max_pages=1)
         """
+        # Resolve customer_name → customer_id if needed
+        if customer_name is not None and customer_id is None:
+            customer = self._find_customer_by_name(customer_name)
+            if customer is None:
+                raise NotFoundError(f"Customer not found: {customer_name}")
+            customer_id = customer.customerId
+
         resolved_filter_id = self._resolve_filter_id(filter_id, filter_name)
-        return self._get_cached_devices(resolved_filter_id, pagesize, use_cache, max_pages)
+
+        # --- Fetch strategy ---
+        # When no filter_id is set and a customer/site scope is given, use the
+        # org-units/{id}/devices endpoint for a server-side scoped fetch.
+        # This avoids pulling all devices across the whole environment.
+        #
+        # When filter_id is set, use GET /devices?filterId=... (N-Central filter
+        # takes precedence) and apply any customer/site scope client-side afterward.
+        if resolved_filter_id is None and (customer_id is not None or site_id is not None):
+            # site_id is more specific than customer_id — prefer it when both given
+            org_unit_id = site_id if site_id is not None else customer_id
+            devices = self._get_cached_devices_for_org_unit(
+                org_unit_id, pagesize, use_cache, max_pages
+            )
+            # If both were provided, ensure devices match the customer too
+            if site_id is not None and customer_id is not None:
+                devices = [d for d in devices if d.customerId == customer_id]
+        else:
+            devices = self._get_cached_devices(resolved_filter_id, pagesize, use_cache, max_pages)
+            # Apply any customer/site scope as client-side filters
+            if customer_id is not None:
+                devices = [d for d in devices if d.customerId == customer_id]
+            if site_id is not None:
+                devices = [d for d in devices if d.siteId == site_id]
+
+        # Apply remaining client-side attribute filters
+        if device_class is not None:
+            dc_lower = device_class.lower()
+            devices = [
+                d for d in devices
+                if dc_lower in d.deviceClass.lower() or dc_lower in d.deviceClassLabel.lower()
+            ]
+        if os_type is not None:
+            os_lower = os_type.lower()
+            devices = [
+                d for d in devices
+                if os_lower in d.supportedOs.lower() or os_lower in d.supportedOsLabel.lower()
+            ]
+
+        return devices
 
     def get_device(
         self,
@@ -297,19 +405,12 @@ class DeviceMixin:
             APIError: If the API request fails
 
         Example:
-            # Get by ID
             device = nc.get_device(device_id=12345)
-
-            # Get by name
             device = nc.get_device(device_name="DC01")
-
-            # Get by name with filter
-            device = nc.get_device(device_name="DC01", filter_name="Domain Controllers")
         """
         if device_id is None and device_name is None:
             raise ValueError("Must provide either device_id or device_name")
 
-        # If device_name provided, use name lookup
         if device_name is not None and device_id is None:
             resolved_filter_id = self._resolve_filter_id(filter_id, filter_name)
             device = self._find_device_by_name(device_name, resolved_filter_id, use_cache)
@@ -317,17 +418,14 @@ class DeviceMixin:
                 raise NotFoundError(f"Device not found: {device_name}")
             return device
 
-        # device_id provided - use ID lookup
         if use_cache:
             self._init_device_cache()
-            # Check all cached device lists for this device
             for cache_key, devices in self._device_cache.items():
                 for device in devices:
                     if device.deviceId == device_id:
                         logger.debug(f"Found device {device_id} in cache ({cache_key})")
                         return device
 
-        # Not in cache or cache disabled, fetch from API
         logger.debug(f"Fetching device {device_id} from API")
         response = self.get(f"devices/{device_id}")
         device_data = response.get("data", response) if isinstance(response, dict) else response
@@ -362,7 +460,7 @@ class DeviceMixin:
         device_name_lower = device_name.lower()
 
         matches = [device for device in devices
-                  if device_name_lower in device.longName.lower()]
+                   if device_name_lower in device.longName.lower()]
         logger.debug(f"Found {len(matches)} devices matching '{device_name}'")
         return matches
 
@@ -391,6 +489,8 @@ class DeviceMixin:
         """
         logger.debug(f"Finding devices for customer {customer_id}")
         resolved_filter_id = self._resolve_filter_id(filter_id, filter_name)
+        if resolved_filter_id is None:
+            return self._get_cached_devices_for_org_unit(customer_id, use_cache=use_cache)
         devices = self._get_cached_devices(resolved_filter_id, use_cache=use_cache)
         matches = [device for device in devices if device.customerId == customer_id]
         logger.debug(f"Found {len(matches)} devices for customer {customer_id}")
@@ -421,10 +521,75 @@ class DeviceMixin:
         """
         logger.debug(f"Finding devices for site {site_id}")
         resolved_filter_id = self._resolve_filter_id(filter_id, filter_name)
+        if resolved_filter_id is None:
+            return self._get_cached_devices_for_org_unit(site_id, use_cache=use_cache)
         devices = self._get_cached_devices(resolved_filter_id, use_cache=use_cache)
         matches = [device for device in devices if device.siteId == site_id]
         logger.debug(f"Found {len(matches)} devices for site {site_id}")
         return matches
+
+    # ========================================================================
+    # DEVICE COUNT HELPERS
+    # ========================================================================
+
+    def get_customer_device_count(self, customer_id: int) -> int:
+        """
+        Get the total device count for a customer without fetching all device objects.
+
+        Uses the org-units/{orgUnitId}/devices endpoint with a single-item page,
+        reading the totalItems field from the pagination metadata.
+
+        Args:
+            customer_id: Customer ID (equals orgUnitId in N-Central)
+
+        Returns:
+            int: Total number of devices for the customer
+
+        Raises:
+            APIError: If the API request fails
+        """
+        logger.debug(f"Fetching device count for customer {customer_id}")
+        response = self.get(
+            f"org-units/{customer_id}/devices",
+            params={"pageSize": 1, "pageNumber": 1}
+        )
+        count = self._extract_total_items(response)
+        logger.debug(f"Customer {customer_id} has {count} devices")
+        return count
+
+    def get_filter_device_count(self, filter_id: int) -> int:
+        """
+        Get the total device count matching a filter without fetching all device objects.
+
+        Args:
+            filter_id: N-Central filter ID
+
+        Returns:
+            int: Total number of devices matching the filter
+
+        Raises:
+            APIError: If the API request fails
+        """
+        logger.debug(f"Fetching device count for filter {filter_id}")
+        response = self.get(
+            "devices",
+            params={"filterId": filter_id, "pageSize": 1, "pageNumber": 1}
+        )
+        count = self._extract_total_items(response)
+        logger.debug(f"Filter {filter_id} matches {count} devices")
+        return count
+
+    def _extract_total_items(self, response: dict) -> int:
+        """Extract total item count from a paginated API response."""
+        if not isinstance(response, dict):
+            return 0
+        # N-Central pagination metadata may use different key names
+        for key in ("totalItems", "totalCount", "total", "count"):
+            if key in response:
+                return int(response[key])
+        # Fallback: count items in data if pagination key not found
+        data = response.get("data", [])
+        return len(data) if isinstance(data, list) else 0
 
     # ========================================================================
     # DEEP LINK URL METHODS
@@ -446,10 +611,6 @@ class DeviceMixin:
 
         Returns:
             str: Deep-link URL to device overview
-
-        Raises:
-            NotFoundError: If device is not found
-            APIError: If the API request fails
         """
         if isinstance(device, int):
             device = self.get_device(device_id=device)
@@ -471,10 +632,6 @@ class DeviceMixin:
 
         Returns:
             str: Deep-link URL to device details
-
-        Raises:
-            NotFoundError: If device is not found
-            APIError: If the API request fails
         """
         if isinstance(device, int):
             device = self.get_device(device_id=device)
@@ -496,10 +653,6 @@ class DeviceMixin:
 
         Returns:
             str: Deep-link URL for remote control
-
-        Raises:
-            NotFoundError: If device is not found
-            APIError: If the API request fails
         """
         if isinstance(device, int):
             device = self.get_device(device_id=device)
@@ -536,385 +689,8 @@ class DeviceMixin:
 
         return url
 
-    def get_active_issues_url(
-        self,
-        username: Optional[str] = None,
-        password: Optional[str] = None,
-        language: str = "en"
-    ) -> str:
-        """
-        Generate URL to active issues view.
-
-        Args:
-            username: N-Central username (optional)
-            password: N-Central password (optional)
-            language: Language code (default: "en")
-
-        Returns:
-            str: Deep-link URL to active issues
-        """
-        if self.ui_port:
-            url = f"{self.base_url}:{self.ui_port}/deepLinkAction.do?method=activeissues"
-        else:
-            url = f"{self.base_url}/deepLinkAction.do?method=activeissues"
-
-        url += f"&language={language}"
-
-        if username:
-            url += f"&username={username}"
-        if password:
-            url += f"&password={password}"
-
-        return url
-
     # ========================================================================
-    # DEVICE MONITORING AND ISSUES
-    # ========================================================================
-
-    def get_active_issues(self, org_unit_id: int, pagesize: int = 50) -> List[ActiveIssue]:
-        """
-        Get active issues for an organization unit.
-
-        Args:
-            org_unit_id: Organization unit ID
-            pagesize: Results per page
-
-        Returns:
-            list: List of ActiveIssue objects
-
-        Raises:
-            APIError: If the API request fails
-        """
-        logger.debug(f"Fetching active issues for org unit {org_unit_id}")
-        issues_data = self.get_all(f"org-units/{org_unit_id}/active-issues", pagesize=pagesize)
-        logger.info(f"Found {len(issues_data)} active issues")
-        return [ActiveIssue.from_dict(issue) for issue in issues_data]
-
-    def get_device_active_issues(
-        self,
-        device_id: Optional[int] = None,
-        device_name: Optional[str] = None
-    ) -> List[ActiveIssue]:
-        """
-        Get active issues for a specific device.
-
-        Args:
-            device_id: Device ID to check (takes priority)
-            device_name: Device name to check
-
-        Returns:
-            list: List of active issues for the device
-
-        Raises:
-            ValueError: If neither device_id nor device_name provided
-            NotFoundError: If device not found
-            APIError: If the API request fails
-        """
-        resolved_device_id = self._resolve_device_id(device_id, device_name)
-        logger.debug(f"Fetching active issues for device {resolved_device_id}")
-        device = self.get_device(device_id=resolved_device_id)
-        all_issues = self.get_active_issues(device.customerId)
-        device_issues = [issue for issue in all_issues if issue.deviceId == resolved_device_id]
-        logger.debug(f"Found {len(device_issues)} active issues for device {resolved_device_id}")
-        return device_issues
-
-    def get_device_assets(
-        self,
-        device_id: Optional[int] = None,
-        device_name: Optional[str] = None
-    ) -> DeviceAssets:
-        """
-        Get detailed hardware/software assets for a device.
-
-        Fetches comprehensive inventory including hardware specs, installed software,
-        services, patches, shares, and system configuration.
-
-        Args:
-            device_id: Device ID to get assets for (takes priority)
-            device_name: Device name to get assets for
-
-        Returns:
-            DeviceAssets: Complete device asset inventory
-
-        Raises:
-            ValueError: If neither device_id nor device_name provided
-            NotFoundError: If device not found
-            APIError: If the API request fails
-
-        Example:
-            # By ID
-            assets = nc.get_device_assets(device_id=12345)
-
-            # By name
-            assets = nc.get_device_assets(device_name="DC01")
-
-            print(f"Device: {assets.device_name}")
-            print(f"Memory: {assets.total_memory_gb:.2f} GB")
-        """
-        resolved_device_id = self._resolve_device_id(device_id, device_name)
-        logger.debug(f"Fetching device assets for device {resolved_device_id}")
-        response = self.get(f"devices/{resolved_device_id}/assets")
-        return DeviceAssets.from_dict(response)
-
-    def get_device_hardware_summary(
-        self,
-        device_id: Optional[int] = None,
-        device_name: Optional[str] = None
-    ) -> dict:
-        """
-        Get a concise hardware summary for a device.
-
-        Args:
-            device_id: Device ID (takes priority)
-            device_name: Device name
-
-        Returns:
-            dict: Hardware summary with key specs
-
-        Raises:
-            ValueError: If neither device_id nor device_name provided
-            NotFoundError: If device not found
-            APIError: If the API request fails
-        """
-        resolved_device_id = self._resolve_device_id(device_id, device_name)
-        logger.debug(f"Getting hardware summary for device {resolved_device_id}")
-        assets = self.get_device_assets(device_id=resolved_device_id)
-
-        return {
-            "device_name": assets.device_name,
-            "manufacturer": assets.manufacturer,
-            "model": assets.model,
-            "operating_system": assets.operating_system,
-            "processor": assets.processor_name,
-            "total_cores": assets.total_cores,
-            "memory_gb": assets.total_memory_gb,
-            "ip_address": assets.ip_address,
-            "physical_drives": [
-                {
-                    "model": drive.modelnumber,
-                    "capacity_gb": drive.capacity_gb,
-                    "serial": drive.serialnumber
-                }
-                for drive in assets.data._extra.physicaldrive
-            ]
-        }
-
-    def get_device_software_inventory(
-        self,
-        device_id: Optional[int] = None,
-        device_name: Optional[str] = None
-    ) -> dict:
-        """
-        Get installed software and patch status for a device.
-
-        Args:
-            device_id: Device ID (takes priority)
-            device_name: Device name
-
-        Returns:
-            dict: Software inventory with applications and patches
-
-        Raises:
-            ValueError: If neither device_id nor device_name provided
-            NotFoundError: If device not found
-            APIError: If the API request fails
-        """
-        resolved_device_id = self._resolve_device_id(device_id, device_name)
-        logger.debug(f"Getting software inventory for device {resolved_device_id}")
-        assets = self.get_device_assets(device_id=resolved_device_id)
-
-        installed_apps = assets.get_installed_applications()
-        installed_patches = assets.get_installed_patches()
-        pending_patches = assets.get_pending_patches()
-
-        return {
-            "device_name": assets.device_name,
-            "os": assets.operating_system,
-            "applications": [
-                {
-                    "name": app.displayname,
-                    "version": app.version,
-                    "publisher": app.publisher,
-                    "installed_date": app.installation_datetime
-                }
-                for app in installed_apps
-            ],
-            "patches": {
-                "installed_count": len(installed_patches),
-                "pending_count": len(pending_patches),
-                "pending_titles": [p.title for p in pending_patches]
-            }
-        }
-
-    def get_device_service_monitoring_status(
-        self,
-        device_id: Optional[int] = None,
-        device_name: Optional[str] = None
-    ) -> ServiceMonitoringCollection:
-        """
-        Get service monitoring status for a device.
-
-        Returns typed ServiceMonitoringCollection with helper methods.
-
-        Args:
-            device_id: Device ID to check (takes priority)
-            device_name: Device name to check
-
-        Returns:
-            ServiceMonitoringCollection: Collection of monitoring statuses
-
-        Raises:
-            ValueError: If neither device_id nor device_name provided
-            NotFoundError: If device not found
-            APIError: If the API request fails
-        """
-        resolved_device_id = self._resolve_device_id(device_id, device_name)
-        logger.debug(f"Fetching service monitoring status for device {resolved_device_id}")
-        response = self.get(f"devices/{resolved_device_id}/service-monitor-status")
-        if isinstance(response, dict) and "data" in response:
-            data = response.get("data", [])
-        else:
-            data = response if isinstance(response, list) else []
-
-        return ServiceMonitoringCollection.from_list(data)
-
-    def get_device_disk_status(
-        self,
-        device_id: Optional[int] = None,
-        device_name: Optional[str] = None
-    ) -> List[ServiceMonitoringStatus]:
-        """
-        Get disk monitoring status for all volumes on a device.
-
-        Args:
-            device_id: Device ID (takes priority)
-            device_name: Device name
-
-        Returns:
-            list: List of disk monitoring statuses
-
-        Raises:
-            ValueError: If neither device_id nor device_name provided
-            NotFoundError: If device not found
-            APIError: If the API request fails
-
-        Example:
-            disks = nc.get_device_disk_status(device_name="DC01")
-            for disk in disks:
-                print(f"{disk.volume_letter}: {disk.stateStatus}")
-        """
-        resolved_device_id = self._resolve_device_id(device_id, device_name)
-        logger.debug(f"Fetching disk status for device {resolved_device_id}")
-        monitoring = self.get_device_service_monitoring_status(device_id=resolved_device_id)
-        return monitoring.get_disk_monitors()
-
-    def get_device_monitoring_summary(
-        self,
-        device_id: Optional[int] = None,
-        device_name: Optional[str] = None
-    ) -> dict:
-        """
-        Get summary of all monitoring statuses for a device.
-
-        Args:
-            device_id: Device ID (takes priority)
-            device_name: Device name
-
-        Returns:
-            dict: Summary with counts and issues
-
-        Raises:
-            ValueError: If neither device_id nor device_name provided
-            NotFoundError: If device not found
-            APIError: If the API request fails
-        """
-        resolved_device_id = self._resolve_device_id(device_id, device_name)
-        logger.debug(f"Getting monitoring summary for device {resolved_device_id}")
-        monitoring = self.get_device_service_monitoring_status(device_id=resolved_device_id)
-        summary = monitoring.summary()
-
-        # Add device info
-        device = self.get_device(device_id=resolved_device_id)
-        summary['device_name'] = device.longName
-        summary['device_id'] = resolved_device_id
-
-        # Add issue details
-        issues = monitoring.get_issues()
-        summary['issues'] = [
-            {
-                'module': issue.moduleName,
-                'status': issue.stateStatus,
-                'ident': issue.taskIdent,
-                'last_scan': issue.last_scan_datetime
-            }
-            for issue in issues
-        ]
-
-        return summary
-
-    def check_device_disk_health(
-        self,
-        device_id: Optional[int] = None,
-        device_name: Optional[str] = None
-    ) -> dict:
-        """
-        Check disk health status for a device.
-
-        Args:
-            device_id: Device ID (takes priority)
-            device_name: Device name
-
-        Returns:
-            dict: Disk health report
-
-        Raises:
-            ValueError: If neither device_id nor device_name provided
-            NotFoundError: If device not found
-            APIError: If the API request fails
-        """
-        resolved_device_id = self._resolve_device_id(device_id, device_name)
-        logger.debug(f"Checking disk health for device {resolved_device_id}")
-        device = self.get_device(device_id=resolved_device_id)
-        disks = self.get_device_disk_status(device_id=resolved_device_id)
-
-        healthy = all(disk.is_normal for disk in disks)
-        warnings = [disk for disk in disks if disk.is_warning]
-        failures = [disk for disk in disks if disk.is_failed]
-
-        logger.info(f"Device {resolved_device_id} disk health: {len(warnings)} warnings, {len(failures)} failures")
-        return {
-            'device_name': device.longName,
-            'device_id': resolved_device_id,
-            'healthy': healthy,
-            'disk_count': len(disks),
-            'volumes': [
-                {
-                    'volume': disk.volume_letter,
-                    'status': disk.stateStatus,
-                    'last_scan': disk.last_scan_datetime
-                }
-                for disk in disks
-            ],
-            'warnings': [
-                {
-                    'volume': disk.volume_letter,
-                    'status': disk.stateStatus,
-                    'last_scan': disk.last_scan_datetime
-                }
-                for disk in warnings
-            ],
-            'failures': [
-                {
-                    'volume': disk.volume_letter,
-                    'status': disk.stateStatus,
-                    'last_scan': disk.last_scan_datetime
-                }
-                for disk in failures
-            ]
-        }
-
-    # ========================================================================
-    # DEVICE LIFECYCLE METHODS
+    # DEVICE LIFECYCLE
     # ========================================================================
 
     def delete_device(
@@ -949,152 +725,3 @@ class DeviceMixin:
         self.delete(f"devices/{resolved_device_id}", params=params)
         self.clear_device_cache()
         return True
-
-    # ========================================================================
-    # APPLIANCE TASK METHODS
-    # ========================================================================
-
-    def get_appliance_task(self, task_id: int) -> ApplianceTask:
-        """
-        Get detailed scan data for an appliance task.
-
-        Calls GET /api/appliance-tasks/{taskId} and returns a generic
-        ApplianceTask containing all reported metrics via serviceDetails.
-
-        Args:
-            task_id: The task ID (from ServiceMonitoringStatus.taskId)
-
-        Returns:
-            ApplianceTask: Parsed task data with service details
-
-        Raises:
-            NotFoundError: If task not found
-            APIError: If the API request fails
-        """
-        logger.debug(f"Fetching appliance task {task_id}")
-        response = self.get(f"appliance-tasks/{task_id}")
-        return ApplianceTask.from_dict(response)
-
-    def get_device_disk_usage(
-        self,
-        device_id: Optional[int] = None,
-        device_name: Optional[str] = None
-    ) -> List[DiskUsage]:
-        """
-        Get disk usage metrics (total, used, free, %) for all monitored volumes.
-
-        Fetches disk monitor task IDs from service monitoring, then retrieves
-        detailed metrics from the appliance-tasks endpoint for each volume.
-
-        Args:
-            device_id: Device ID (takes priority)
-            device_name: Device name
-
-        Returns:
-            list: List of DiskUsage objects, one per monitored volume
-
-        Raises:
-            ValueError: If neither device_id nor device_name provided
-            NotFoundError: If device not found
-            APIError: If the API request fails
-
-        Example:
-            disks = nc.get_device_disk_usage(device_name="DC01")
-            for disk in disks:
-                print(f"{disk.volume}: {disk.free_gb:.1f} GB free ({disk.usage_percent}% used)")
-        """
-        resolved_device_id = self._resolve_device_id(device_id, device_name)
-        logger.debug(f"Fetching disk usage for device {resolved_device_id}")
-        monitoring = self.get_device_service_monitoring_status(device_id=resolved_device_id)
-        disk_monitors = monitoring.get_disk_monitors()
-
-        results = []
-        for monitor in disk_monitors:
-            task = self.get_appliance_task(monitor.taskId)
-            results.append(DiskUsage(
-                volume=monitor.volume_letter or "Unknown",
-                total_kb=task.get_detail_value("disk_total") or 0,
-                used_kb=task.get_detail_value("disk_used") or 0,
-                free_kb=task.get_detail_value("disk_free") or 0,
-                usage_percent=task.get_detail_value("disk_usage") or 0,
-                state=task.state,
-                scan_time=task.scanTime,
-            ))
-
-        logger.info(f"Retrieved disk usage for {len(results)} volumes on device {resolved_device_id}")
-        return results
-
-    def get_device_cpu_usage(
-        self,
-        device_id: Optional[int] = None,
-        device_name: Optional[str] = None
-    ) -> CpuUsage:
-        """
-        Get CPU usage metrics including top 5 processes for a device.
-
-        Args:
-            device_id: Device ID (takes priority)
-            device_name: Device name
-
-        Returns:
-            CpuUsage: CPU usage percentage and top processes
-
-        Raises:
-            ValueError: If neither device_id nor device_name provided
-            NotFoundError: If device or CPU monitor not found
-            APIError: If the API request fails
-
-        Example:
-            cpu = nc.get_device_cpu_usage(device_name="DC01")
-            print(f"CPU: {cpu.usage_percent}%")
-            for proc in cpu.top_processes:
-                print(f"  {proc.name} (PID {proc.pid}): {proc.cpu_usage_percent}%")
-        """
-        resolved_device_id = self._resolve_device_id(device_id, device_name)
-        logger.debug(f"Fetching CPU usage for device {resolved_device_id}")
-        monitoring = self.get_device_service_monitoring_status(device_id=resolved_device_id)
-        cpu_monitors = monitoring.get_cpu_monitors()
-
-        if not cpu_monitors:
-            raise NotFoundError(f"No CPU monitor found for device {resolved_device_id}")
-
-        task = self.get_appliance_task(cpu_monitors[0].taskId)
-        logger.info(f"Retrieved CPU usage for device {resolved_device_id}")
-        return CpuUsage.from_appliance_task(task)
-
-    def get_device_memory_usage(
-        self,
-        device_id: Optional[int] = None,
-        device_name: Optional[str] = None
-    ) -> MemoryUsage:
-        """
-        Get memory usage metrics (physical + virtual) including top 5 processes.
-
-        Args:
-            device_id: Device ID (takes priority)
-            device_name: Device name
-
-        Returns:
-            MemoryUsage: Physical and virtual memory metrics with top processes
-
-        Raises:
-            ValueError: If neither device_id nor device_name provided
-            NotFoundError: If device or memory monitor not found
-            APIError: If the API request fails
-
-        Example:
-            mem = nc.get_device_memory_usage(device_name="DC01")
-            print(f"Physical: {mem.physical_used_gb:.1f}/{mem.physical_total_gb:.1f} GB ({mem.physical_usage_percent}%)")
-            print(f"Virtual: {mem.virtual_used_gb:.1f}/{mem.virtual_total_gb:.1f} GB ({mem.virtual_usage_percent}%)")
-        """
-        resolved_device_id = self._resolve_device_id(device_id, device_name)
-        logger.debug(f"Fetching memory usage for device {resolved_device_id}")
-        monitoring = self.get_device_service_monitoring_status(device_id=resolved_device_id)
-        mem_monitors = monitoring.get_memory_monitors()
-
-        if not mem_monitors:
-            raise NotFoundError(f"No memory monitor found for device {resolved_device_id}")
-
-        task = self.get_appliance_task(mem_monitors[0].taskId)
-        logger.info(f"Retrieved memory usage for device {resolved_device_id}")
-        return MemoryUsage.from_appliance_task(task)

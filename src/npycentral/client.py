@@ -7,6 +7,8 @@ from cachetools import TTLCache
 from zoneinfo import ZoneInfo
 
 from .mixins.device_mixin import DeviceMixin
+from .mixins.monitoring_mixin import MonitoringMixin
+from .mixins.metrics_mixin import MetricsMixin
 from .mixins.customer_mixin import CustomerMixin
 from .mixins.task_mixin import TaskMixin
 from .mixins.property_mixin import PropertyMixin
@@ -40,7 +42,7 @@ class SecretString:
         return "**********"
 
 
-class NCentralClient(DeviceMixin, CustomerMixin, TaskMixin, PropertyMixin, FilterMixin):
+class NCentralClient(DeviceMixin, MonitoringMixin, MetricsMixin, CustomerMixin, TaskMixin, PropertyMixin, FilterMixin):
     """N-Central API Client with modular functionality via mixins."""
 
     def __init__(
@@ -298,6 +300,10 @@ class NCentralClient(DeviceMixin, CustomerMixin, TaskMixin, PropertyMixin, Filte
 
             if not page_data:
                 break
+
+            warning = page_response.get("_warning") if isinstance(page_response, dict) else None
+            if warning:
+                logger.warning(f"API warning for {endpoint} (page {page}): {warning}")
 
             results.extend(page_data)
 

@@ -27,6 +27,7 @@ class Customer:
     county: Optional[str] = None
     isSystem: bool = False
     isServiceOrg: bool = False
+    soId: Optional[int] = None
     _client: Optional[Any] = field(default=None, repr=False)
     _psa_customer_id: Optional[int] = field(default=None, repr=False)
 
@@ -57,7 +58,7 @@ class Customer:
             'phone', 'contactTitle', 'contactEmail', 'contactPhone',
             'contactPhoneExt', 'contactDepartment', 'street1', 'street2',
             'city', 'stateProv', 'country', 'postalCode', 'county',
-            'isSystem', 'isServiceOrg', '_client', '_psa_customer_id'
+            'isSystem', 'isServiceOrg', 'soId', '_client', '_psa_customer_id'
         }
         filtered_data = {k: v for k, v in customer_data.items() if k in known_fields}
 
