@@ -5,6 +5,8 @@ from cachetools import TTLCache
 
 from ..models.service_organization import ServiceOrganization
 from ..models.customer import Customer
+from ..models.site import Site
+from ..models.device_class import DeviceClass, DEVICE_CLASSES
 from ..exceptions import NotFoundError
 
 logger = logging.getLogger(__name__)
@@ -250,12 +252,26 @@ class CustomerMixin:
         logger.info(f"Creating site under customer {customer_id}")
         return self.post(f"customers/{customer_id}/sites", site_data)
 
-    def get_service_orgs(self, pagesize: int = 50) -> List[ServiceOrganization]:
+    def _init_so_cache(self):
+        """Initialize service org cache if not already present."""
+        if not hasattr(self, '_so_cache'):
+            # SOs change very rarely — use a long TTL
+            self._so_cache = TTLCache(maxsize=10, ttl=3600)
+            logger.debug("Initialized service org cache with TTL=3600s")
+
+    def clear_so_cache(self):
+        """Clear the service org cache."""
+        if hasattr(self, '_so_cache'):
+            self._so_cache.clear()
+            logger.debug("Cleared service org cache")
+
+    def get_service_orgs(self, pagesize: int = 50, use_cache: bool = True) -> List[ServiceOrganization]:
         """
         Get all service organizations.
 
         Args:
             pagesize: Number of results per page (default: 50)
+            use_cache: Whether to cache results (default: True — SOs rarely change)
 
         Returns:
             list: List of ServiceOrganization objects
@@ -263,9 +279,20 @@ class CustomerMixin:
         Raises:
             APIError: If the API request fails
         """
-        logger.debug("Fetching service organizations")
-        orgs_data = self.get_all("service-orgs", pagesize=pagesize)
-        return [ServiceOrganization.from_dict(org) for org in orgs_data]
+        if not use_cache:
+            logger.debug("Fetching service organizations (no cache)")
+            orgs_data = self.get_all("service-orgs", pagesize=pagesize)
+            return [ServiceOrganization.from_dict(org) for org in orgs_data]
+
+        self._init_so_cache()
+        cache_key = "service_orgs"
+        if cache_key not in self._so_cache:
+            logger.debug("Cache miss for service_orgs, fetching from API")
+            orgs_data = self.get_all("service-orgs", pagesize=pagesize)
+            self._so_cache[cache_key] = [ServiceOrganization.from_dict(org) for org in orgs_data]
+        else:
+            logger.debug("Cache hit for service_orgs")
+        return self._so_cache[cache_key]
 
     def _find_customer_by_name(
         self,
@@ -397,3 +424,116 @@ class CustomerMixin:
             return None
         except NotFoundError:
             return None
+
+    # ========================================================================
+    # MULTI-SO CUSTOMER FETCH
+    # ========================================================================
+
+    def get_all_customers(
+        self,
+        pagesize: int = 50,
+        use_cache: bool = False
+    ) -> List[Customer]:
+        """
+        Get customers across every service organization.
+
+        Unlike get_customers() which is scoped to a single SO, this method
+        iterates all SOs returned by get_service_orgs() and aggregates results.
+        Each returned Customer will have its soId field populated.
+
+        Args:
+            pagesize: Number of results per page per SO (default: 50)
+            use_cache: Whether to use the customer cache per SO (default: False)
+
+        Returns:
+            list: List of Customer objects across all SOs
+
+        Raises:
+            APIError: If the API request fails
+
+        Example:
+            all_customers = nc.get_all_customers()
+            for c in all_customers:
+                print(f"{c.customerName} (SO {c.soId})")
+        """
+        orgs = self.get_service_orgs(use_cache=True)
+        all_customers: List[Customer] = []
+        for org in orgs:
+            so_id = int(org.soId)
+            customers = self._get_cached_customers(so_id, pagesize, use_cache)
+            for c in customers:
+                c.soId = so_id
+            all_customers.extend(customers)
+        logger.info(f"Fetched {len(all_customers)} customers across {len(orgs)} service orgs")
+        return all_customers
+
+    # ========================================================================
+    # SITES
+    # ========================================================================
+
+    def get_sites(self, customer_id: int, pagesize: int = 50) -> List[Site]:
+        """
+        List all sites for a customer.
+
+        Args:
+            customer_id: Customer ID
+            pagesize: Number of results per page (default: 50)
+
+        Returns:
+            list: List of Site objects
+
+        Raises:
+            APIError: If the API request fails
+
+        Example:
+            sites = nc.get_sites(customer_id=237)
+            for site in sites:
+                print(f"{site.siteName} ({site.city})")
+        """
+        logger.debug(f"Fetching sites for customer {customer_id}")
+        sites_data = self.get_all(f"customers/{customer_id}/sites", pagesize=pagesize)
+        logger.info(f"Found {len(sites_data)} sites for customer {customer_id}")
+        return [Site.from_dict(s) for s in sites_data]
+
+    def get_all_sites(self, pagesize: int = 50) -> List[Site]:
+        """
+        List all sites across all customers and service organizations.
+
+        Uses the top-level GET /api/sites endpoint.
+
+        Args:
+            pagesize: Number of results per page (default: 50)
+
+        Returns:
+            list: List of Site objects
+
+        Raises:
+            APIError: If the API request fails
+        """
+        logger.debug("Fetching all sites")
+        sites_data = self.get_all("sites", pagesize=pagesize)
+        logger.info(f"Fetched {len(sites_data)} sites total")
+        return [Site.from_dict(s) for s in sites_data]
+
+    # ========================================================================
+    # DEVICE CLASSES
+    # ========================================================================
+
+    def get_device_classes(self) -> List[DeviceClass]:
+        """
+        Return the known N-Central device classes.
+
+        N-Central does not expose a dedicated REST endpoint for device classes,
+        so this returns a hardcoded list derived from the N-Central API spec.
+        The deviceClassName values match the deviceClassLabel field on Device objects.
+
+        Returns:
+            list: List of DeviceClass objects
+
+        Example:
+            classes = nc.get_device_classes()
+            for dc in classes:
+                print(dc.deviceClassName)
+            # Server, Workstation, Laptop, Network Device, ...
+        """
+        return list(DEVICE_CLASSES)

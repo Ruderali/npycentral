@@ -26,6 +26,7 @@ from .exceptions import (
     TaskError,
     CacheError,
 )
+from .models import Site, DeviceClass, MaintenanceWindow, ScheduledTask
 from ._version import __version__
 
 # Set up null handler (library best practice)
@@ -41,5 +42,9 @@ __all__ = [
     'ValidationError',
     'TaskError',
     'CacheError',
+    'Site',
+    'DeviceClass',
+    'MaintenanceWindow',
+    'ScheduledTask',
     '__version__',
 ]
