@@ -130,6 +130,10 @@ class MonitoringMixin:
         """
         Get active issues for a specific device.
 
+        Note: The N-Central API has no per-device active-issues endpoint. This method
+        fetches all active issues for the device's customer and filters client-side,
+        so cost scales with the total number of issues across that customer.
+
         Args:
             device_id: Device ID to check (takes priority)
             device_name: Device name to check

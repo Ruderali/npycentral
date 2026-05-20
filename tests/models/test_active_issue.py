@@ -68,13 +68,13 @@ class TestActiveIssueFromDict:
 
         assert issue._extra is None
 
-    def test_from_dict_pops_extra_from_input_dict(self):
+    def test_from_dict_does_not_mutate_input_dict(self):
         data = make_active_issue_data(with_extra=True)
         assert "_extra" in data
 
         ActiveIssue.from_dict(data)
 
-        assert "_extra" not in data
+        assert "_extra" in data
 
 
 # ========================================================================
