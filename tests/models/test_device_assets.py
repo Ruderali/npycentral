@@ -838,14 +838,11 @@ class TestDeviceAssets:
 
         assert assets.total_cores == 28
 
-    def test_get_installed_applications_raises_attribute_error(self):
-        """ApplicationDetailed does not have an is_installed property.
-        This documents a known issue: get_installed_applications will raise
-        AttributeError at runtime."""
+    def test_get_installed_applications_returns_all(self):
         assets = DeviceAssets.from_dict(make_device_assets_data())
-
-        with pytest.raises(AttributeError):
-            assets.get_installed_applications()
+        apps = assets.get_installed_applications()
+        assert isinstance(apps, list)
+        assert all(isinstance(a, ApplicationDetailed) for a in apps)
 
     def test_get_auto_start_services(self):
         assets = DeviceAssets.from_dict(make_device_assets_data())
