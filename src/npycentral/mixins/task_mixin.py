@@ -120,7 +120,7 @@ class TaskMixin:
         task_name: str,
         customer_id: int,
         device_id: int,
-        task_type: str = "AutomationPolicy",
+        task_type: str = "Automation Policy",
         parameters: Optional[List[Dict[str, str]]] = None,
         interval: int = 15,
         timeout: int = 60 * 10,
@@ -133,7 +133,7 @@ class TaskMixin:
             task_name: Name of the task to run
             customer_id: Customer ID
             device_id: Device ID to run the task on
-            task_type: Type of task (default: "AutomationPolicy")
+            task_type: Type of task (default: "Automation Policy")
             parameters: Optional list of task parameters
             interval: Polling interval in seconds (default: 15)
             timeout: Maximum wait time in seconds (default: 600)

@@ -1,6 +1,18 @@
-from dataclasses import dataclass
-from typing import Optional, List
+from dataclasses import dataclass, fields as dc_fields, MISSING
+from typing import Optional, List, Union, get_type_hints, get_origin, get_args
 from datetime import datetime
+
+
+def _from_dict(cls, data: dict):
+    known = {f.name for f in dc_fields(cls)}
+    hints = get_type_hints(cls)
+    filtered = {k: v for k, v in data.items() if k in known}
+    for f in dc_fields(cls):
+        if f.name not in filtered and f.default is MISSING and f.default_factory is MISSING:
+            hint = hints.get(f.name)
+            if get_origin(hint) is Union and type(None) in get_args(hint):
+                filtered[f.name] = None
+    return cls(**filtered)
 
 
 @dataclass
@@ -57,7 +69,7 @@ class IssueExtra:
     @classmethod
     def from_dict(cls, data: dict) -> 'IssueExtra':
         """Create an IssueExtra instance from a dictionary."""
-        return cls(**data)
+        return _from_dict(cls, data)
     
     @property
     def transition_datetime(self) -> Optional[datetime]:
@@ -86,7 +98,7 @@ class ActiveIssue:
     @classmethod
     def from_dict(cls, data: dict) -> 'ActiveIssue':
         """Create an ActiveIssue instance from a dictionary."""
-        extra_data = data.pop('_extra', None)
+        extra_data = data.get('_extra')
         extra = IssueExtra.from_dict(extra_data) if extra_data else None
         
         return cls(
