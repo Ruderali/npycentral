@@ -117,7 +117,14 @@ class DeviceMixin:
     # ========================================================================
 
     def _init_device_cache(self):
-        """Initialize device cache if not already present."""
+        """Initialize device cache if not already present.
+
+        Warning: TTLCache is not thread-safe. This is fine for the common pattern of
+        populating the cache single-threaded then fanning out reads, but if you share
+        a client across threads in a long-running parallel workload (longer than the
+        TTL), threads can race on a cache miss. In that case either call
+        get_devices() with use_cache=False, or wrap cache access in a lock.
+        """
         if not hasattr(self, '_device_cache'):
             self._device_cache = TTLCache(maxsize=50, ttl=300)
             self._device_cache_ttl = 300
