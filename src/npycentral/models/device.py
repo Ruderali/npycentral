@@ -1,5 +1,5 @@
-from dataclasses import dataclass
-from typing import Optional, Any
+from dataclasses import dataclass, fields as dc_fields, MISSING
+from typing import Optional, Any, Union, get_type_hints, get_origin, get_args
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from .device_assets import DeviceAssets
@@ -37,21 +37,19 @@ class Device:
     _client: Optional[Any] = None  # Store client reference for lazy loading
     
     @classmethod
-    def from_dict(cls, data: dict, timezone: ZoneInfo = ZoneInfo("UTC"), 
+    def from_dict(cls, data: dict, timezone: ZoneInfo = ZoneInfo("UTC"),
                   client: Optional[Any] = None) -> 'Device':
-        """
-        Create a Device instance from a dictionary.
-        
-        Args:
-            data: Dictionary containing device data
-            timezone: ZoneInfo object for datetime operations (defaults to UTC)
-            client: Optional NCentralClient reference for lazy-loading assets
-        """
-        # Add timezone and client to the data dict
-        device_data = data.copy()
-        device_data['timezone'] = timezone
-        device_data['_client'] = client
-        return cls(**device_data)
+        known = {f.name for f in dc_fields(cls)}
+        hints = get_type_hints(cls)
+        filtered = {k: v for k, v in data.items() if k in known}
+        for f in dc_fields(cls):
+            if f.name not in filtered and f.default is MISSING and f.default_factory is MISSING:
+                hint = hints.get(f.name)
+                if get_origin(hint) is Union and type(None) in get_args(hint):
+                    filtered[f.name] = None
+        filtered['timezone'] = timezone
+        filtered['_client'] = client
+        return cls(**filtered)
     
     @property
     def last_checkin_datetime(self) -> Optional[datetime]:

@@ -131,9 +131,11 @@ for patch in sw['pending_patches'][:5]:
 ```python
 # Run an automation policy/script on a device
 result = client.run_and_monitor_task(
+    repo_id=12345,          # Repository/item ID of the task in N-Central
+    task_name="My Script",
+    customer_id=device.customerId,
     device_id=device.deviceId,
-    task_id=12345,  # Your script/task ID from N-Central
-    timeout=300     # Wait up to 5 minutes
+    timeout=300             # Wait up to 5 minutes
 )
 
 print(f"Task completed with status: {result['status']}")

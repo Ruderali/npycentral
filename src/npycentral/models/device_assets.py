@@ -787,7 +787,7 @@ class DeviceAssets:
     
     def get_installed_applications(self) -> List[ApplicationDetailed]:
         """Get list of installed applications."""
-        return [app for app in self.data._extra.application if app.is_installed]
+        return list(self.data._extra.application)
     
     def get_auto_start_services(self) -> List[Service]:
         """Get list of services that start automatically."""
