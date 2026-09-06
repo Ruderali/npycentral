@@ -52,7 +52,7 @@ class TestCustomerCache:
     def test_cache_miss_then_hit_only_one_api_call(self, activate_responses, client):
         activate_responses.add(
             responses.GET,
-            f"{BASE_URL}/api/customers",
+            f"{BASE_URL}/api/service-orgs/50/customers",
             json=make_paginated_response([
                 make_customer_data(customer_id=237),
             ]),
@@ -66,23 +66,23 @@ class TestCustomerCache:
         assert len(result1) == 1
         assert len(result2) == 1
 
-        # Count GET calls to /api/customers (exclude auth POST)
+        # Count GET customer-list calls (exclude auth POST)
         get_calls = [
             c for c in activate_responses.calls
-            if c.request.method == "GET" and "/api/customers" in c.request.url
+            if c.request.method == "GET" and "/customers" in c.request.url
         ]
         assert len(get_calls) == 1
 
     def test_cache_bypass_always_fetches_fresh(self, activate_responses, client):
         activate_responses.add(
             responses.GET,
-            f"{BASE_URL}/api/customers",
+            f"{BASE_URL}/api/service-orgs/50/customers",
             json=make_paginated_response([make_customer_data(customer_id=237)]),
             status=200,
         )
         activate_responses.add(
             responses.GET,
-            f"{BASE_URL}/api/customers",
+            f"{BASE_URL}/api/service-orgs/50/customers",
             json=make_paginated_response([make_customer_data(customer_id=237)]),
             status=200,
         )
@@ -91,7 +91,7 @@ class TestCustomerCache:
 
         get_calls = [
             c for c in activate_responses.calls
-            if c.request.method == "GET" and "/api/customers" in c.request.url
+            if c.request.method == "GET" and "/customers" in c.request.url
         ]
         assert len(get_calls) == 2
 
@@ -107,7 +107,7 @@ class TestGetCustomers:
     def test_returns_customer_objects(self, activate_responses, client):
         activate_responses.add(
             responses.GET,
-            f"{BASE_URL}/api/customers",
+            f"{BASE_URL}/api/service-orgs/50/customers",
             json=make_paginated_response([
                 make_customer_data(customer_id=237),
                 make_customer_data(customer_id=238, customer_name="Beta Inc"),
@@ -123,6 +123,38 @@ class TestGetCustomers:
     def test_uses_base_so_id_default(self, activate_responses, client):
         activate_responses.add(
             responses.GET,
+            f"{BASE_URL}/api/service-orgs/50/customers",
+            json=make_paginated_response([make_customer_data()]),
+            status=200,
+        )
+        client.get_customers()
+        get_calls = [
+            c for c in activate_responses.calls
+            if c.request.method == "GET" and "/customers" in c.request.url
+        ]
+        assert len(get_calls) == 1
+        assert "/api/service-orgs/50/customers" in get_calls[0].request.url
+        assert "soId=" not in get_calls[0].request.url
+
+    def test_with_custom_so_id(self, activate_responses, client):
+        activate_responses.add(
+            responses.GET,
+            f"{BASE_URL}/api/service-orgs/99/customers",
+            json=make_paginated_response([make_customer_data()]),
+            status=200,
+        )
+        client.get_customers(so_id=99)
+        get_calls = [
+            c for c in activate_responses.calls
+            if c.request.method == "GET" and "/customers" in c.request.url
+        ]
+        assert "/api/service-orgs/99/customers" in get_calls[0].request.url
+
+    def test_so_id_none_uses_flat_endpoint(self, activate_responses, client):
+        """With no base_so_id, fall back to the unscoped /api/customers endpoint."""
+        client.base_so_id = None
+        activate_responses.add(
+            responses.GET,
             f"{BASE_URL}/api/customers",
             json=make_paginated_response([make_customer_data()]),
             status=200,
@@ -130,24 +162,21 @@ class TestGetCustomers:
         client.get_customers()
         get_calls = [
             c for c in activate_responses.calls
-            if c.request.method == "GET" and "/api/customers" in c.request.url
+            if c.request.method == "GET" and "/customers" in c.request.url
         ]
         assert len(get_calls) == 1
-        assert "soId=50" in get_calls[0].request.url
+        assert "/api/customers" in get_calls[0].request.url
 
-    def test_with_custom_so_id(self, activate_responses, client):
+    def test_scoped_fetch_stamps_so_id(self, activate_responses, client):
+        """The API omits soId on customer payloads, so it is stamped from the scope."""
         activate_responses.add(
             responses.GET,
-            f"{BASE_URL}/api/customers",
-            json=make_paginated_response([make_customer_data()]),
+            f"{BASE_URL}/api/service-orgs/99/customers",
+            json=make_paginated_response([make_customer_data(customer_id=237)]),
             status=200,
         )
-        client.get_customers(so_id=99)
-        get_calls = [
-            c for c in activate_responses.calls
-            if c.request.method == "GET" and "/api/customers" in c.request.url
-        ]
-        assert "soId=99" in get_calls[0].request.url
+        result = client.get_customers(so_id=99)
+        assert result[0].soId == 99
 
 
 class TestGetCustomer:
@@ -167,7 +196,7 @@ class TestGetCustomer:
     def test_by_name_returns_customer(self, activate_responses, client):
         activate_responses.add(
             responses.GET,
-            f"{BASE_URL}/api/customers",
+            f"{BASE_URL}/api/service-orgs/50/customers",
             json=make_paginated_response([
                 make_customer_data(customer_id=237, customer_name="Acme Corp"),
                 make_customer_data(customer_id=238, customer_name="Beta Inc"),
@@ -185,7 +214,7 @@ class TestGetCustomer:
     def test_name_not_found_raises_not_found_error(self, activate_responses, client):
         activate_responses.add(
             responses.GET,
-            f"{BASE_URL}/api/customers",
+            f"{BASE_URL}/api/service-orgs/50/customers",
             json=make_paginated_response([
                 make_customer_data(customer_id=237, customer_name="Acme Corp"),
             ]),
@@ -197,7 +226,7 @@ class TestGetCustomer:
     def test_by_id_from_cache(self, activate_responses, client):
         activate_responses.add(
             responses.GET,
-            f"{BASE_URL}/api/customers",
+            f"{BASE_URL}/api/service-orgs/50/customers",
             json=make_paginated_response([
                 make_customer_data(customer_id=237, customer_name="Acme Corp"),
                 make_customer_data(customer_id=238, customer_name="Beta Inc"),
@@ -220,7 +249,7 @@ class TestFindCustomersByName:
     def test_partial_match_found(self, activate_responses, client):
         activate_responses.add(
             responses.GET,
-            f"{BASE_URL}/api/customers",
+            f"{BASE_URL}/api/service-orgs/50/customers",
             json=make_paginated_response([
                 make_customer_data(customer_id=237, customer_name="Acme Corp"),
                 make_customer_data(customer_id=238, customer_name="Beta Inc"),
@@ -234,7 +263,7 @@ class TestFindCustomersByName:
     def test_no_matches_returns_empty_list(self, activate_responses, client):
         activate_responses.add(
             responses.GET,
-            f"{BASE_URL}/api/customers",
+            f"{BASE_URL}/api/service-orgs/50/customers",
             json=make_paginated_response([
                 make_customer_data(customer_id=237, customer_name="Acme Corp"),
             ]),
