@@ -95,6 +95,11 @@ class CustomerMixin:
         """
         Fetch customers fresh from API without caching.
 
+        Scoping to a service organization uses the nested
+        GET /api/service-orgs/{soId}/customers endpoint. The flat
+        GET /api/customers endpoint has no soId query parameter — passing one
+        is silently ignored and returns customers across every SO.
+
         Args:
             so_id: Optional service organization ID
             pagesize: Results per page
@@ -105,11 +110,24 @@ class CustomerMixin:
         if so_id is None and self.base_so_id is not None:
             so_id = int(self.base_so_id)
 
-        params = {"soId": so_id} if so_id else None
-        logger.debug(f"Fetching customers (SO ID: {so_id}, pagesize={pagesize})")
-        customers_data = self.get_all("customers", params=params, pagesize=pagesize)
+        if so_id is not None:
+            endpoint = f"service-orgs/{so_id}/customers"
+        else:
+            endpoint = "customers"
+
+        logger.debug(f"Fetching customers from {endpoint} (SO ID: {so_id}, pagesize={pagesize})")
+        customers_data = self.get_all(endpoint, pagesize=pagesize)
         logger.info(f"Fetched {len(customers_data)} customers")
-        return [Customer.from_dict(c, client=self) for c in customers_data]
+
+        customers = [Customer.from_dict(c, client=self) for c in customers_data]
+
+        # The API never returns soId on a customer payload, so stamp it from the
+        # scope we requested.
+        if so_id is not None:
+            for customer in customers:
+                customer.soId = so_id
+
+        return customers
 
     # ========================================================================
     # CORE CUSTOMER METHODS
